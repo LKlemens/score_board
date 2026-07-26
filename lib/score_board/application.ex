@@ -7,8 +7,13 @@ defmodule ScoreBoard.Application do
 
   @impl true
   def start(_type, _args) do
+    # Gossip discovers peer nodes on the local network via UDP multicast, so two
+    # dev nodes cluster automatically without configured node lists.
+    topologies = [gossip: [strategy: Cluster.Strategy.Gossip]]
+
     children = [
       ScoreBoardWeb.Telemetry,
+      {Cluster.Supervisor, [topologies, [name: ScoreBoard.ClusterSupervisor]]},
       {DNSCluster, query: Application.get_env(:score_board, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: ScoreBoard.PubSub},
       # Start a worker by calling: ScoreBoard.Worker.start_link(arg)
