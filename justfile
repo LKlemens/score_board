@@ -10,14 +10,10 @@ setup:
 test:
     mix test
 
-# Start a named demo node: just node board3 4002
+# Start demo node boardN on port 4000+N-1, e.g. `just board 1`, `just board 2`, ...
+board n:
+    PORT=$((3999 + {{ n }})) iex --sname board{{ n }} -S mix phx.server
+
+# Start a node with a custom name and port: just node scores 5000
 node name port:
     PORT={{ port }} iex --sname {{ name }} -S mix phx.server
-
-# Start demo node board1 on port 4000
-board1:
-    @just node board1 4000
-
-# Start demo node board2 on port 4001 (in a second terminal)
-board2:
-    @just node board2 4001

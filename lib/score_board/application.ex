@@ -23,6 +23,9 @@ defmodule ScoreBoard.Application do
       ScoreBoard.Board,
       {Horde.DynamicSupervisor,
        name: ScoreBoard.MatchSupervisor, strategy: :one_for_one, members: :auto},
+      # One-shot seeding of configured matches; a :temporary Task, so a
+      # boot race with a peer node seeding the same ids cannot cycle the tree
+      {Task, &ScoreBoard.Matches.create_prefilled/0},
       # Start to serve requests, typically the last entry
       ScoreBoardWeb.Endpoint
     ]

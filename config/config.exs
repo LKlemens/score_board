@@ -10,6 +10,9 @@ import Config
 config :score_board,
   generators: [timestamp_type: :utc_datetime]
 
+# Matches created automatically on every node at boot (idempotent)
+config :score_board, :prefilled_matches, ["POL-GER", "ESP-FRA", "BRA-ARG"]
+
 # Configure the endpoint
 config :score_board, ScoreBoardWeb.Endpoint,
   url: [host: "localhost"],

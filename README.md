@@ -13,11 +13,12 @@ Start two named nodes in separate terminals (libcluster's LocalEpmd strategy
 discovers and connects all local nodes automatically — no multicast needed):
 
 ```sh
-just board1
-just board2
+just board 1
+just board 2
 ```
 
-Extra nodes: `just node board3 4002`. Without `just`:
+Add as many as you like (`just board 3`, ...) — node `boardN` serves on port
+`4000+N-1`. Without `just`:
 
 ```sh
 PORT=4000 iex --sname board1 -S mix phx.server

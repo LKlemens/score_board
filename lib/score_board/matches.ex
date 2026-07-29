@@ -45,6 +45,19 @@ defmodule ScoreBoard.Matches do
     Horde.Registry.select(@registry, [{{{:match, :"$1"}, :_, :_}, [], [:"$1"]}])
   end
 
+  @doc """
+  Creates all matches listed under `config :score_board, :prefilled_matches`.
+
+  Runs on every node at boot; idempotent — matches that already exist
+  (created by a peer node or an earlier boot) are skipped.
+  """
+  @spec create_prefilled() :: :ok
+  def create_prefilled do
+    :score_board
+    |> Application.get_env(:prefilled_matches, [])
+    |> Enum.each(&create_match/1)
+  end
+
   @doc "Scores a goal on the match process, wherever it runs."
   @spec score_goal(match_id(), Match.team()) :: :ok | {:error, :match_not_found}
   def score_goal(id, team) do

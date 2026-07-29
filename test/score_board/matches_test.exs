@@ -36,6 +36,19 @@ defmodule ScoreBoard.MatchesTest do
     end)
   end
 
+  test "create_prefilled/0 seeds configured matches idempotently", %{id: id} do
+    # Only this test touches the (test-env empty) :prefilled_matches key.
+    Application.put_env(:score_board, :prefilled_matches, [id])
+    on_exit(fn -> Application.put_env(:score_board, :prefilled_matches, []) end)
+
+    assert :ok = Matches.create_prefilled()
+    assert id in Matches.list_matches()
+
+    # A peer node booting later reruns the seeding without harm.
+    assert :ok = Matches.create_prefilled()
+    assert {:ok, %{home: 0, away: 0}} = Matches.score(id)
+  end
+
   test "unknown matches return errors", %{id: id} do
     assert {:error, :match_not_found} = Matches.score_goal(id, :home)
     assert {:error, :match_not_found} = Matches.score(id)
