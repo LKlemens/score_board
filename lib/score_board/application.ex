@@ -14,7 +14,19 @@ defmodule ScoreBoard.Application do
       ScoreBoardWeb.Telemetry,
       {Cluster.Supervisor, [topologies, [name: ScoreBoard.ClusterSupervisor]]},
       {DNSCluster, query: Application.get_env(:score_board, :dns_cluster_query) || :ignore},
-      {Phoenix.PubSub, name: ScoreBoard.PubSub},
+      # Two PubSub instances side by side: the default (PG2) one carries
+      # transient traffic — LiveView internals and the boards' local UI
+      # notifications — while the EchoPubSub one carries the domain events
+      # that need at-least-once delivery. A blip halts only the event
+      # stream; the UI stays live.
+      Supervisor.child_spec({Phoenix.PubSub, name: ScoreBoard.PubSub}, id: ScoreBoard.PubSub),
+      # buffer_size 20 keeps the overflow demo reachable: hold a blip past
+      # ~20 events and the producer expires this node's cursor
+      Supervisor.child_spec(
+        {Phoenix.PubSub,
+         name: ScoreBoard.EchoPubSub, adapter: EchoPubSub, pool_size: 1, buffer_size: 20},
+        id: ScoreBoard.EchoPubSub
+      ),
       {Task.Supervisor, name: ScoreBoard.TaskSupervisor},
       {Horde.Registry, name: ScoreBoard.MatchRegistry, keys: :unique, members: :auto},
       # The board must exist before Horde can place match processes here:

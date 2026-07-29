@@ -18,6 +18,7 @@ defmodule ScoreBoard.Board do
 
   require Logger
 
+  alias ScoreBoard.EchoPubSub
   alias ScoreBoard.Match
   alias ScoreBoard.Matches
 
@@ -98,7 +99,9 @@ defmodule ScoreBoard.Board do
   @impl GenServer
   def init(:ok) do
     :ets.new(Helper.name(), [:named_table, :protected, read_concurrency: true])
-    :ok = Phoenix.PubSub.subscribe(ScoreBoard.PubSub, Helper.topic())
+    # Match events ride the EchoPubSub instance; the board's own update
+    # notifications stay on the default (PG2) instance below.
+    :ok = EchoPubSub.subscribe(Helper.topic())
     # No state: the table and topics resolve through the Helper effects,
     # in this process too. Catch up on pre-existing matches via reload.
     {:ok, nil, {:continue, :reload}}
@@ -126,6 +129,18 @@ defmodule ScoreBoard.Board do
   @impl GenServer
   def handle_info({:goal, id, team}, state) do
     apply_goal(id, team)
+    {:noreply, state}
+  end
+
+  @impl GenServer
+  def handle_info({:cursor_expired, from_node}, state) do
+    # This board fell off a producer's ring buffer: the gap is gone for
+    # good, so rebuild from the source of truth instead of waiting.
+    Logger.warning(
+      "Board fell behind producer on #{inspect(from_node)}; reloading from match processes"
+    )
+
+    do_reload()
     {:noreply, state}
   end
 

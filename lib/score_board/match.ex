@@ -14,6 +14,7 @@ defmodule ScoreBoard.Match do
   use GenServer, restart: :transient
 
   alias ScoreBoard.Board
+  alias ScoreBoard.EchoPubSub
   alias ScoreBoard.Matches
 
   @topic "matches:events"
@@ -26,7 +27,10 @@ defmodule ScoreBoard.Match do
     GenServer.start_link(__MODULE__, id, name: Matches.via(id))
   end
 
-  @doc "Topic carrying `{:match_created, id}` and `{:goal, id, team}` events."
+  @doc """
+  Topic carrying `{:match_created, id}` and `{:goal, id, team}` events —
+  on `ScoreBoard.EchoPubSub`, because these events must not be lost.
+  """
   @spec topic() :: String.t()
   def topic, do: @topic
 
@@ -38,7 +42,7 @@ defmodule ScoreBoard.Match do
         :error -> %{home: 0, away: 0}
       end
 
-    :ok = Phoenix.PubSub.broadcast(ScoreBoard.PubSub, @topic, {:match_created, id})
+    :ok = EchoPubSub.broadcast(@topic, {:match_created, id})
     {:ok, %{id: id, score: score}}
   end
 
@@ -46,7 +50,7 @@ defmodule ScoreBoard.Match do
   def handle_call({:goal, team}, _from, state) when team in [:home, :away] do
     state = update_in(state.score[team], &(&1 + 1))
 
-    :ok = Phoenix.PubSub.broadcast(ScoreBoard.PubSub, @topic, {:goal, state.id, team})
+    :ok = EchoPubSub.broadcast(@topic, {:goal, state.id, team})
     {:reply, :ok, state}
   end
 
