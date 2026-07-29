@@ -9,9 +9,10 @@ defmodule ScoreBoard.Board do
 
   Writes serialize through the GenServer; reads go straight to ETS.
 
-  One board per node runs under the default name in the application tree;
-  extra instances can be started under any `:name` (also the ETS table
-  name) with their own `:topic` — used by tests to isolate suites.
+  One board per node runs in the application tree. The registered name
+  (also the ETS table name) and the events topic are resolved through the
+  `ScoreBoard.Board.Helper` effects, which tests rebind (efx) to run fully
+  isolated per-test instances.
   """
   use GenServer
 
@@ -23,17 +24,35 @@ defmodule ScoreBoard.Board do
   @typedoc "A board's registered name, doubling as its ETS table name."
   @type board_name :: atom()
 
+  defmodule Helper do
+    @moduledoc false
+    # The board name (also its ETS table) and events topic. Effects, so
+    # tests can rebind them: efx resolves bindings by walking $ancestors,
+    # which reaches processes the test supervises — including this board's
+    # own init. Match processes live under the app's Horde tree (no test
+    # ancestor), so they always resolve the defaults.
+    use Efx
+
+    @spec name() :: ScoreBoard.Board.board_name()
+    defeffect name do
+      ScoreBoard.Board
+    end
+
+    @spec topic() :: String.t()
+    defeffect topic do
+      ScoreBoard.Match.topic()
+    end
+  end
+
   @spec start_link(keyword()) :: GenServer.on_start()
-  def start_link(opts) do
-    name = Keyword.get(opts, :name, __MODULE__)
-    topic = Keyword.get(opts, :topic, Match.topic())
-    GenServer.start_link(__MODULE__, {name, topic}, name: name)
+  def start_link(_opts) do
+    GenServer.start_link(__MODULE__, :ok, name: Helper.name())
   end
 
   @doc "All matches this board knows about, keyed by match id."
-  @spec scores(board_name()) :: %{Matches.match_id() => Match.score()}
-  def scores(board \\ __MODULE__) do
-    board
+  @spec scores() :: %{Matches.match_id() => Match.score()}
+  def scores do
+    Helper.name()
     |> :ets.tab2list()
     |> Map.new(fn {id, home, away} -> {id, %{home: home, away: away}} end)
   end
@@ -44,9 +63,9 @@ defmodule ScoreBoard.Board do
   Safe to call even before the table exists (a Horde-restarted match uses
   it during startup to re-seed its score).
   """
-  @spec fetch_score(board_name(), Matches.match_id()) :: {:ok, Match.score()} | :error
-  def fetch_score(board \\ __MODULE__, id) do
-    case :ets.lookup(board, id) do
+  @spec fetch_score(Matches.match_id()) :: {:ok, Match.score()} | :error
+  def fetch_score(id) do
+    case :ets.lookup(Helper.name(), id) do
       [{^id, home, away}] -> {:ok, %{home: home, away: away}}
       [] -> :error
     end
@@ -62,63 +81,63 @@ defmodule ScoreBoard.Board do
   there is no window where a reader sees a stale board with no further
   update coming.
   """
-  @spec subscribe(board_name()) :: :ok | {:error, term()}
-  def subscribe(board \\ __MODULE__) do
-    Phoenix.PubSub.subscribe(ScoreBoard.PubSub, updates_topic(board))
+  @spec subscribe() :: :ok | {:error, term()}
+  def subscribe do
+    Phoenix.PubSub.subscribe(ScoreBoard.PubSub, updates_topic(Helper.name()))
   end
 
   @doc """
   Rebuilds the derived table from the true scores — the recovery path for
   a board that knows it missed events.
   """
-  @spec reload(board_name()) :: :ok
-  def reload(board \\ __MODULE__) do
-    GenServer.call(board, :reload)
+  @spec reload() :: :ok
+  def reload do
+    GenServer.call(Helper.name(), :reload)
   end
 
   @impl GenServer
-  def init({name, topic}) do
-    :ets.new(name, [:named_table, :protected, read_concurrency: true])
-    :ok = Phoenix.PubSub.subscribe(ScoreBoard.PubSub, topic)
-    state = %{table: name, updates_topic: updates_topic(name)}
-    # Catch up on matches that existed before this board started.
-    {:ok, state, {:continue, :reload}}
+  def init(:ok) do
+    :ets.new(Helper.name(), [:named_table, :protected, read_concurrency: true])
+    :ok = Phoenix.PubSub.subscribe(ScoreBoard.PubSub, Helper.topic())
+    # No state: the table and topics resolve through the Helper effects,
+    # in this process too. Catch up on pre-existing matches via reload.
+    {:ok, nil, {:continue, :reload}}
   end
 
   @impl GenServer
   def handle_continue(:reload, state) do
-    do_reload(state)
+    do_reload()
     {:noreply, state}
   end
 
   @impl GenServer
   def handle_call(:reload, _from, state) do
-    do_reload(state)
+    do_reload()
     {:reply, :ok, state}
   end
 
   @impl GenServer
   def handle_info({:match_created, id}, state) do
-    :ets.insert_new(state.table, {id, 0, 0})
-    notify(state, {:match_added, id})
+    :ets.insert_new(Helper.name(), {id, 0, 0})
+    notify({:match_added, id})
     {:noreply, state}
   end
 
   @impl GenServer
   def handle_info({:goal, id, team}, state) do
-    apply_goal(state, id, team)
+    apply_goal(id, team)
     {:noreply, state}
   end
 
-  defp apply_goal(state, id, team) do
-    case fetch_score(state.table, id) do
+  defp apply_goal(id, team) do
+    case fetch_score(id) do
       {:ok, _score} ->
-        :ets.update_counter(state.table, id, {position(team), 1})
-        {:ok, score} = fetch_score(state.table, id)
-        notify(state, {:score_updated, id, score})
+        :ets.update_counter(Helper.name(), id, {position(team), 1})
+        {:ok, score} = fetch_score(id)
+        notify({:score_updated, id, score})
 
       :error ->
-        recover_row(state, id)
+        recover_row(id)
     end
   end
 
@@ -126,12 +145,12 @@ defmodule ScoreBoard.Board do
   # late or the events were lost), so counting from zero would bake the
   # loss in. Recover from the source of truth instead — it already includes
   # this goal, because matches bump state before broadcasting.
-  defp recover_row(state, id) do
+  defp recover_row(id) do
     case Matches.score(id) do
       {:ok, %{home: home, away: away} = score} ->
-        :ets.insert(state.table, {id, home, away})
-        notify(state, {:match_added, id})
-        notify(state, {:score_updated, id, score})
+        :ets.insert(Helper.name(), {id, home, away})
+        notify({:match_added, id})
+        notify({:score_updated, id, score})
 
       {:error, :match_not_found} ->
         # No reachable source of truth: fabricating a row would bake invalid
@@ -145,7 +164,7 @@ defmodule ScoreBoard.Board do
   defp position(:home), do: 2
   defp position(:away), do: 3
 
-  defp do_reload(state) do
+  defp do_reload do
     ids = Matches.list_matches()
 
     results =
@@ -163,7 +182,7 @@ defmodule ScoreBoard.Board do
     |> Enum.zip(results)
     |> Enum.each(fn
       {id, {:ok, {:ok, %{home: home, away: away}}}} ->
-        :ets.insert(state.table, {id, home, away})
+        :ets.insert(Helper.name(), {id, home, away})
 
       {id, {:ok, {:error, :match_not_found}}} ->
         Logger.warning("Board reload skipped match #{inspect(id)}: no reachable match process")
@@ -172,13 +191,15 @@ defmodule ScoreBoard.Board do
         Logger.warning("Board reload skipped match #{inspect(id)}: #{inspect(reason)}")
     end)
 
-    notify(state, :board_reloaded)
+    notify(:board_reloaded)
   end
 
   # local_broadcast: the derived board is per-node state — a stale board
-  # must not push its staleness to peers.
-  defp notify(state, event) do
-    Phoenix.PubSub.local_broadcast(ScoreBoard.PubSub, state.updates_topic, event)
+  # must not push its staleness to peers. Publishes on the updates topic
+  # (derived from the board name) — not Helper.topic(), which is the events
+  # topic this board consumes.
+  defp notify(event) do
+    Phoenix.PubSub.local_broadcast(ScoreBoard.PubSub, updates_topic(Helper.name()), event)
   end
 
   defp updates_topic(__MODULE__), do: "board:updates"
