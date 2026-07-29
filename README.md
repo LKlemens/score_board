@@ -9,8 +9,15 @@ Now you can visit [`localhost:4000`](http://localhost:4000) from your browser.
 
 ## Running the two-node demo
 
-Start two named nodes in separate terminals (libcluster's Gossip strategy
-discovers and connects them automatically):
+Start two named nodes in separate terminals (libcluster's LocalEpmd strategy
+discovers and connects all local nodes automatically — no multicast needed):
+
+```sh
+just board1
+just board2
+```
+
+Extra nodes: `just node board3 4002`. Without `just`:
 
 ```sh
 PORT=4000 iex --sname board1 -S mix phx.server

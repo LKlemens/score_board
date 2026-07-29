@@ -7,9 +7,8 @@ defmodule ScoreBoard.Application do
 
   @impl true
   def start(_type, _args) do
-    # Gossip discovers peer nodes on the local network via UDP multicast, so two
-    # dev nodes cluster automatically without configured node lists.
-    topologies = [gossip: [strategy: Cluster.Strategy.Gossip]]
+    # LocalEpmd discovers every node registered with the local epmd daemon
+    topologies = [local: [strategy: Cluster.Strategy.LocalEpmd]]
 
     children = [
       ScoreBoardWeb.Telemetry,
