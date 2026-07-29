@@ -25,7 +25,7 @@ defmodule ScoreBoard.BoardTest do
   defp sync(board), do: :sys.get_state(board)
 
   defp broadcast(event) do
-    Phoenix.PubSub.broadcast(ScoreBoard.PubSub, Helper.topic(), event)
+    ScoreBoard.EchoPubSub.broadcast(Helper.topic(), event)
   end
 
   test "derives rows from match_created and goal events", %{id: id, board: board} do
@@ -86,6 +86,24 @@ defmodule ScoreBoard.BoardTest do
     assert {:ok, %{home: 0, away: 1}} = Board.fetch_score(id)
 
     assert :ok = Board.reload()
+    assert {:ok, %{home: 1, away: 0}} = Board.fetch_score(id)
+  end
+
+  @tag capture_log: true
+  test "cursor_expired triggers a reload from the true scores", %{id: id, board: board} do
+    :ok = Matches.create_match(id)
+    :ok = Matches.score_goal(id, :home)
+
+    # Diverge this board, then simulate falling off a producer's buffer.
+    broadcast({:match_created, id})
+    broadcast({:goal, id, :away})
+    sync(board)
+    assert {:ok, %{home: 0, away: 1}} = Board.fetch_score(id)
+
+    :ok = Board.subscribe()
+    broadcast({:cursor_expired, :peer@nohost})
+
+    assert_receive :board_reloaded
     assert {:ok, %{home: 1, away: 0}} = Board.fetch_score(id)
   end
 

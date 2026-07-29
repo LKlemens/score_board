@@ -41,6 +41,14 @@ Each match runs as a single process somewhere in the cluster (placed by
 Horde) — the source of truth for its score. Each node keeps its own derived
 board in ETS, fed by PubSub events.
 
+The app runs **two PubSub instances side by side** — the incremental
+adoption story: `ScoreBoard.PubSub` (default PG2 adapter) keeps carrying
+transient traffic (LiveView internals, the boards' local UI notifications),
+while `ScoreBoard.EchoPubSub` (EchoPubSub adapter) carries only the domain
+events that must not be lost. During a blip the event stream freezes and
+later replays — but the UI stays fully live, because it rides the other
+instance.
+
 Every node's page shows *all* nodes' boards side by side, next to the true
 score held by each match process: one column per node, read over `:erpc` so
 the display stays reliable even when PubSub is degraded. A red cell means
@@ -58,6 +66,21 @@ an *offline* badge marks an unreachable node.
    the match is still there, owned by the survivor, score intact. (If the
    survivor's board had missed events, the restored score is its best
    available view — there is no persistence layer.)
+4. Network blip (EchoPubSub): press *Go offline* on node B — its worker now
+   rejects incoming batches *below the ack*, so remote producers buffer and
+   retry. **Blip a node that does not own the match you score**: events for
+   locally-owned matches are dispatched without crossing the network, so
+   blipping the owner shows nothing (check the *Owner* column — after a
+   fresh start the first-booted node owns all prefilled matches). Score goals on node A: B's column turns red and freezes on every
+   page while A's advances. Press *Back online* — the buffered events
+   replay **in order** and B converges. (Plain PG2 would have lost them
+   forever.) The *1ms blip* and *5s outage* buttons do the same with
+   automatic recovery.
+5. Buffer overflow: stay offline on B past ~20 events scored on A — B's
+   cursor falls off A's ring buffer (`buffer_size: 20`). On reconnect B
+   receives `{:cursor_expired, node}` instead of a replay and the board
+   reloads everything from the match processes — converged either way,
+   just via the documented recovery path.
 
 Ready to run in production? Please [check our deployment guides](https://phoenix.hexdocs.pm/deployment.html).
 

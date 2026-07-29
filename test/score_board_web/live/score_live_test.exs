@@ -7,9 +7,11 @@ defmodule ScoreBoardWeb.ScoreLiveTest do
   import Phoenix.LiveViewTest
   import ScoreBoard.TestHelpers
 
+  alias ScoreBoard.Blip
   alias ScoreBoard.Matches
 
   setup %{test: test} do
+    on_exit(fn -> Blip.off() end)
     {:ok, id: Atom.to_string(test)}
   end
 
@@ -49,6 +51,29 @@ defmodule ScoreBoardWeb.ScoreLiveTest do
     assert_eventually(fn ->
       assert score_cell(view, id) =~ "1 : 0"
       assert view |> element(~s{[data-true-score-id="#{id}"]}) |> render() =~ "1 : 0"
+    end)
+  end
+
+  test "blip toggle flips fault injection and the badge", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    view |> element("button", "Go offline") |> render_click()
+    assert Blip.enabled?()
+    assert view |> element("#net-status") |> render() =~ "offline"
+
+    view |> element("button", "Back online") |> render_click()
+    refute Blip.enabled?()
+    assert view |> element("#net-status") |> render() =~ "connected"
+  end
+
+  test "timed blip presets recover automatically", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    view |> element("button", "1ms blip") |> render_click()
+
+    assert_eventually(fn ->
+      refute Blip.enabled?()
+      assert view |> element("#net-status") |> render() =~ "connected"
     end)
   end
 

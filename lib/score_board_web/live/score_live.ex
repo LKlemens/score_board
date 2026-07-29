@@ -11,6 +11,7 @@ defmodule ScoreBoardWeb.ScoreLive do
   """
   use ScoreBoardWeb, :live_view
 
+  alias ScoreBoard.Blip
   alias ScoreBoard.Board
   alias ScoreBoard.Matches
 
@@ -27,7 +28,15 @@ defmodule ScoreBoardWeb.ScoreLive do
       Process.send_after(self(), :poll, @poll_interval)
     end
 
-    socket = assign(socket, page_title: "Scoreboard", node: node(), new_match_id: "", error: nil)
+    socket =
+      assign(socket,
+        page_title: "Scoreboard",
+        node: node(),
+        new_match_id: "",
+        error: nil,
+        blip: Blip.enabled?()
+      )
+
     {:ok, refresh(socket)}
   end
 
@@ -49,6 +58,17 @@ defmodule ScoreBoardWeb.ScoreLive do
     end
   end
 
+  def handle_event("blip", %{"duration" => duration}, socket) do
+    Blip.on()
+    Process.send_after(self(), :blip_off, String.to_integer(duration))
+    {:noreply, assign(socket, blip: true)}
+  end
+
+  def handle_event("toggle-blip", _params, socket) do
+    if Blip.enabled?(), do: Blip.off(), else: Blip.on()
+    {:noreply, assign(socket, blip: Blip.enabled?())}
+  end
+
   @impl Phoenix.LiveView
   def handle_info(:poll, socket) do
     Process.send_after(self(), :poll, @poll_interval)
@@ -60,6 +80,11 @@ defmodule ScoreBoardWeb.ScoreLive do
   def handle_info({:match_added, _id}, socket), do: {:noreply, refresh(socket)}
   def handle_info({:score_updated, _id, _score}, socket), do: {:noreply, refresh(socket)}
   def handle_info(:board_reloaded, socket), do: {:noreply, refresh(socket)}
+
+  def handle_info(:blip_off, socket) do
+    Blip.off()
+    {:noreply, socket |> assign(blip: false) |> refresh()}
+  end
 
   defp create_match(""), do: {:error, "match id can't be blank"}
 
@@ -141,6 +166,9 @@ defmodule ScoreBoardWeb.ScoreLive do
         <div class="text-center space-y-2">
           <h1 class="text-2xl font-bold">Live Scoreboard</h1>
           <p class="text-sm opacity-70 font-mono">{@node}</p>
+          <span id="net-status" class={["badge", (@blip && "badge-error") || "badge-success"]}>
+            {if @blip, do: "offline", else: "connected"}
+          </span>
         </div>
 
         <form phx-submit="create" class="flex justify-center gap-2">
@@ -216,6 +244,20 @@ defmodule ScoreBoardWeb.ScoreLive do
         <p :if={@matches == []} class="text-center opacity-70">
           No matches yet — create one above.
         </p>
+
+        <div class="divider">Network</div>
+
+        <div class="flex justify-center gap-4">
+          <button class="btn btn-outline" phx-click="blip" phx-value-duration="1">
+            1ms blip
+          </button>
+          <button class="btn btn-outline" phx-click="blip" phx-value-duration="5000">
+            5s outage
+          </button>
+          <button class="btn btn-warning" phx-click="toggle-blip">
+            {if @blip, do: "Back online", else: "Go offline"}
+          </button>
+        </div>
       </div>
     </Layouts.app>
     """
