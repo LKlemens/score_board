@@ -27,6 +27,24 @@ iex(board1@host)> Node.list()
 Then open [`localhost:4000`](http://localhost:4000) and
 [`localhost:4001`](http://localhost:4001) side by side.
 
+### Demo script
+
+Each match runs as a single process somewhere in the cluster (placed by
+Horde) — the source of truth for its score. Each node keeps its own derived
+board in ETS, fed by PubSub events.
+
+1. Create a few matches from either browser tab — they appear on both, and
+   the *Owner node* column shows where each match process actually lives
+   (creating on `board1` does not mean owning on `board1`).
+2. Click goal buttons from either tab: the goal is routed to the owning
+   match process, wherever it runs, and every node's board converges.
+3. Failover: kill the node that owns a match (`Ctrl+C` twice in its
+   terminal). Horde restarts the match on the survivor, which re-seeds the
+   score from the survivor's derived board — refresh the surviving tab and
+   the match is still there, owned by the survivor, score intact. (If the
+   survivor's board had missed events, the restored score is its best
+   available view — there is no persistence layer.)
+
 Ready to run in production? Please [check our deployment guides](https://phoenix.hexdocs.pm/deployment.html).
 
 ## Learn more
