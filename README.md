@@ -41,7 +41,13 @@ Each match runs as a single process somewhere in the cluster (placed by
 Horde) — the source of truth for its score. Each node keeps its own derived
 board in ETS, fed by PubSub events.
 
-1. Create a few matches from either browser tab — they appear on both, and
+Every node's page shows *all* nodes' boards side by side, next to the true
+score held by each match process: one column per node, read over `:erpc` so
+the display stays reliable even when PubSub is degraded. A red cell means
+that node's board disagrees with the true score (stale or missing data);
+an *offline* badge marks an unreachable node.
+
+1. Create a few matches from either browser tab — they appear in both, and
    the *Owner node* column shows where each match process actually lives
    (creating on `board1` does not mean owning on `board1`).
 2. Click goal buttons from either tab: the goal is routed to the owning

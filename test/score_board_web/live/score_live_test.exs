@@ -48,6 +48,7 @@ defmodule ScoreBoardWeb.ScoreLiveTest do
 
     assert_eventually(fn ->
       assert score_cell(view, id) =~ "1 : 0"
+      assert view |> element(~s{[data-true-score-id="#{id}"]}) |> render() =~ "1 : 0"
     end)
   end
 
