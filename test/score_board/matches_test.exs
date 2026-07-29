@@ -1,15 +1,16 @@
 defmodule ScoreBoard.MatchesTest do
-  # Matches live in the global Horde registry and boards share one ETS
-  # table, so this suite is serialized on purpose.
-  use ExUnit.Case, async: false
+  # Matches live in the global Horde registry and the shared default board,
+  # but every assertion is scoped to this test's unique id, so the tests
+  # can run concurrently.
+  use ExUnit.Case, async: true
 
   import ScoreBoard.TestHelpers
 
   alias ScoreBoard.Board
   alias ScoreBoard.Matches
 
-  setup do
-    {:ok, id: "match-#{System.unique_integer([:positive])}"}
+  setup %{test: test} do
+    {:ok, id: Atom.to_string(test)}
   end
 
   test "create_match/1 starts and registers a match once", %{id: id} do
@@ -21,14 +22,14 @@ defmodule ScoreBoard.MatchesTest do
     assert {:error, :already_exists} = Matches.create_match(id)
   end
 
-  test "score_goal/2 updates the authoritative score and boards derive it", %{id: id} do
+  test "score_goal/2 updates the true score and boards derive it", %{id: id} do
     :ok = Matches.create_match(id)
 
     assert :ok = Matches.score_goal(id, :home)
     assert :ok = Matches.score_goal(id, :away)
     assert :ok = Matches.score_goal(id, :home)
 
-    assert {:ok, %{home: 2, away: 1}} = Matches.authoritative_score(id)
+    assert {:ok, %{home: 2, away: 1}} = Matches.score(id)
 
     assert_eventually(fn ->
       assert {:ok, %{home: 2, away: 1}} = Board.fetch_score(id)
@@ -37,11 +38,11 @@ defmodule ScoreBoard.MatchesTest do
 
   test "unknown matches return errors", %{id: id} do
     assert {:error, :match_not_found} = Matches.score_goal(id, :home)
-    assert {:error, :match_not_found} = Matches.authoritative_score(id)
+    assert {:error, :match_not_found} = Matches.score(id)
     assert {:error, :match_not_found} = Matches.owner_node(id)
   end
 
-  test "a restarted match restores its score from the local board", %{id: id} do
+  test "a restarted match re-seeds its score from the local board", %{id: id} do
     :ok = Matches.create_match(id)
     :ok = Matches.score_goal(id, :home)
     :ok = Matches.score_goal(id, :away)
@@ -53,7 +54,7 @@ defmodule ScoreBoard.MatchesTest do
     id |> Matches.via() |> GenServer.whereis() |> Process.exit(:kill)
 
     assert_eventually(fn ->
-      assert {:ok, %{home: 1, away: 1}} = Matches.authoritative_score(id)
+      assert {:ok, %{home: 1, away: 1}} = Matches.score(id)
     end)
   end
 end

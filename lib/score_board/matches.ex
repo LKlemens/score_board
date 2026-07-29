@@ -2,9 +2,10 @@ defmodule ScoreBoard.Matches do
   @moduledoc """
   Public API for the cluster-wide match processes.
 
-  Each match runs as a single authoritative `ScoreBoard.Match` process
-  somewhere in the cluster, placed and supervised by Horde. All access goes
-  through the Horde registry, so callers never care which node owns a match.
+  Each match runs as a single `ScoreBoard.Match` process somewhere in the
+  cluster — the source of truth for its score — placed and supervised by
+  Horde. All access goes through the Horde registry, so callers never care
+  which node owns a match.
 
   ## Examples
 
@@ -12,7 +13,7 @@ defmodule ScoreBoard.Matches do
       :ok
       iex> ScoreBoard.Matches.score_goal("POL-GER", :home)
       :ok
-      iex> ScoreBoard.Matches.authoritative_score("POL-GER")
+      iex> ScoreBoard.Matches.score("POL-GER")
       {:ok, %{home: 1, away: 0}}
   """
 
@@ -44,7 +45,7 @@ defmodule ScoreBoard.Matches do
     Horde.Registry.select(@registry, [{{{:match, :"$1"}, :_, :_}, [], [:"$1"]}])
   end
 
-  @doc "Scores a goal on the authoritative match process, wherever it runs."
+  @doc "Scores a goal on the match process, wherever it runs."
   @spec score_goal(match_id(), Match.team()) :: :ok | {:error, :match_not_found}
   def score_goal(id, team) do
     GenServer.call(via(id), {:goal, team})
@@ -52,9 +53,12 @@ defmodule ScoreBoard.Matches do
     :exit, {:noproc, _} -> {:error, :match_not_found}
   end
 
-  @doc "Reads the authoritative score, as opposed to a board's derived one."
-  @spec authoritative_score(match_id()) :: {:ok, Match.score()} | {:error, :match_not_found}
-  def authoritative_score(id) do
+  @doc """
+  The true score, read from the match process itself (the source of
+  truth) — as opposed to a board's derived copy.
+  """
+  @spec score(match_id()) :: {:ok, Match.score()} | {:error, :match_not_found}
+  def score(id) do
     GenServer.call(via(id), :score)
   catch
     :exit, {:noproc, _} -> {:error, :match_not_found}

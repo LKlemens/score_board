@@ -1,6 +1,6 @@
 defmodule ScoreBoard.Match do
   @moduledoc """
-  Authoritative process for a single match.
+  The source of truth for a single match.
 
   Exactly one instance runs somewhere in the cluster, placed by Horde. It
   owns the true score; per-node `ScoreBoard.Board`s only derive it from the
