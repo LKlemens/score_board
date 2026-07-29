@@ -14,10 +14,9 @@ defmodule ScoreBoardWeb.Router do
     plug :accepts, ["json"]
   end
 
+  # The scoreboard UI lands in the follow-up web PR.
   scope "/", ScoreBoardWeb do
     pipe_through :browser
-
-    get "/", PageController, :home
   end
 
   # Other scopes may use custom stacks.

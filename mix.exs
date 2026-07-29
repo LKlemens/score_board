@@ -70,6 +70,7 @@ defmodule ScoreBoard.MixProject do
       {:jason, "~> 1.2"},
       {:dns_cluster, "~> 0.2.0"},
       {:libcluster, "~> 3.4"},
+      {:horde, "~> 0.10"},
       {:bandit, "~> 1.5"}
     ]
   end

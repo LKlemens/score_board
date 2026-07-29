@@ -16,8 +16,14 @@ defmodule ScoreBoard.Application do
       {Cluster.Supervisor, [topologies, [name: ScoreBoard.ClusterSupervisor]]},
       {DNSCluster, query: Application.get_env(:score_board, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: ScoreBoard.PubSub},
-      # Start a worker by calling: ScoreBoard.Worker.start_link(arg)
-      # {ScoreBoard.Worker, arg},
+      {Task.Supervisor, name: ScoreBoard.TaskSupervisor},
+      {Horde.Registry, name: ScoreBoard.MatchRegistry, keys: :unique, members: :auto},
+      # The board must exist before Horde can place match processes here:
+      # a restarted match reads this node's board in init/1 to restore its
+      # score. It also subscribes to PubSub, so it starts after that too.
+      ScoreBoard.Board,
+      {Horde.DynamicSupervisor,
+       name: ScoreBoard.MatchSupervisor, strategy: :one_for_one, members: :auto},
       # Start to serve requests, typically the last entry
       ScoreBoardWeb.Endpoint
     ]
