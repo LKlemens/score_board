@@ -103,3 +103,21 @@
 [data-phx-session], [data-phx-teleported-src] { display: contents }
 
 /* This file is for your main application CSS */
+
+/* Cluster visualization: healthy links show flowing dashes; broken links
+   are static and sparse. Buckets ease their size as backlogs grow/drain. */
+@keyframes link-flow {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+
+.link-live {
+  stroke-dasharray: 8 8;
+  animation: link-flow 0.7s linear infinite;
+  opacity: 0.5;
+}
+
+.link-broken {
+  stroke-dasharray: 4 10;
+}

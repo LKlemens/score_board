@@ -3,7 +3,7 @@ defmodule ScoreBoard.Matches do
   Public API for the cluster-wide match processes.
 
   Each match runs as a single `ScoreBoard.Match` process somewhere in the
-  cluster — the source of truth for its score — placed and supervised by
+  cluster - the source of truth for its score - placed and supervised by
   Horde. All access goes through the Horde registry, so callers never care
   which node owns a match.
 
@@ -48,7 +48,7 @@ defmodule ScoreBoard.Matches do
   @doc """
   Creates all matches listed under `config :score_board, :prefilled_matches`.
 
-  Runs on every node at boot; idempotent — matches that already exist
+  Runs on every node at boot; idempotent - matches that already exist
   (created by a peer node or an earlier boot) are skipped.
   """
   @spec create_prefilled() :: :ok
@@ -68,7 +68,7 @@ defmodule ScoreBoard.Matches do
 
   @doc """
   The true score, read from the match process itself (the source of
-  truth) — as opposed to a board's derived copy.
+  truth) - as opposed to a board's derived copy.
   """
   @spec score(match_id()) :: {:ok, Match.score()} | {:error, :match_not_found}
   def score(id) do

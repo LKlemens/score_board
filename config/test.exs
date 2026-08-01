@@ -1,6 +1,6 @@
 import Config
 
-# No boot-time seeding in tests — each test creates its own matches
+# No boot-time seeding in tests - each test creates its own matches
 config :score_board, :prefilled_matches, []
 
 # We don't run a server during test. If one is required,

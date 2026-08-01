@@ -1,5 +1,5 @@
 defmodule ScoreBoardWeb.ScoreLiveTest do
-  # Uses the global Matches/Board stack — the real end-to-end event flow.
+  # Uses the global Matches/Board stack - the real end-to-end event flow.
   # All assertions are scoped to this test's unique match id, so the tests
   # can run concurrently.
   use ScoreBoardWeb.ConnCase, async: true
@@ -24,6 +24,14 @@ defmodule ScoreBoardWeb.ScoreLiveTest do
 
     assert html =~ Atom.to_string(node())
     assert html =~ "Create match"
+  end
+
+  test "renders the cluster visualization with this node", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    svg = view |> element("#cluster-viz") |> render()
+    assert svg =~ "fill-success"
+    assert svg =~ node() |> Atom.to_string() |> String.split("@") |> hd()
   end
 
   test "creating a match adds it to the board", %{conn: conn, id: id} do

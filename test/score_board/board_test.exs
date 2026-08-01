@@ -1,6 +1,6 @@
 defmodule ScoreBoard.BoardTest do
   # Each test runs its own board on its own topic, so tests never share
-  # board state — that is what makes async safe here. Efx resolves the
+  # board state - that is what makes async safe here. Efx resolves the
   # Helper bindings by walking $ancestors, so both this process and the
   # board started under the test supervisor see the per-test values.
   use EfxCase, async: true
@@ -21,7 +21,7 @@ defmodule ScoreBoard.BoardTest do
   end
 
   # Broadcast puts the event in the board's mailbox before returning, and a
-  # call is processed strictly after it — after this, ETS is up to date.
+  # call is processed strictly after it - after this, ETS is up to date.
   defp sync(board), do: :sys.get_state(board)
 
   defp broadcast(event) do
@@ -112,7 +112,7 @@ defmodule ScoreBoard.BoardTest do
     :ok = Matches.score_goal(id, :home)
 
     # Killing the board wipes its ETS table; the restarted board catches up
-    # via the reload it runs in handle_continue. The kill is asynchronous —
+    # via the reload it runs in handle_continue. The kill is asynchronous -
     # wait for the DOWN before polling, or we would read the old table and
     # let the test end mid-restart.
     old = Process.whereis(board)

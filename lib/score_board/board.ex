@@ -4,7 +4,7 @@ defmodule ScoreBoard.Board do
 
   Subscribes to match events and folds them into a public-read ETS table.
   This is deliberately a cache: a missed event leaves this node's board
-  permanently wrong — the failure mode the demo showcases. `reload/1`
+  permanently wrong - the failure mode the demo showcases. `reload/1`
   rebuilds the table from the true scores held by the match processes.
 
   Writes serialize through the GenServer; reads go straight to ETS.
@@ -29,7 +29,7 @@ defmodule ScoreBoard.Board do
     @moduledoc false
     # The board name (also its ETS table) and events topic. Effects, so
     # tests can rebind them: efx resolves bindings by walking $ancestors,
-    # which reaches processes the test supervises — including this board's
+    # which reaches processes the test supervises - including this board's
     # own init. Match processes live under the app's Horde tree (no test
     # ancestor), so they always resolve the defaults.
     use Efx
@@ -88,7 +88,7 @@ defmodule ScoreBoard.Board do
   end
 
   @doc """
-  Rebuilds the derived table from the true scores — the recovery path for
+  Rebuilds the derived table from the true scores - the recovery path for
   a board that knows it missed events.
   """
   @spec reload() :: :ok
@@ -158,7 +158,7 @@ defmodule ScoreBoard.Board do
 
   # A goal for an unknown match proves this board missed events (it started
   # late or the events were lost), so counting from zero would bake the
-  # loss in. Recover from the source of truth instead — it already includes
+  # loss in. Recover from the source of truth instead - it already includes
   # this goal, because matches bump state before broadcasting.
   defp recover_row(id) do
     case Matches.score(id) do
@@ -209,9 +209,9 @@ defmodule ScoreBoard.Board do
     notify(:board_reloaded)
   end
 
-  # local_broadcast: the derived board is per-node state — a stale board
+  # local_broadcast: the derived board is per-node state - a stale board
   # must not push its staleness to peers. Publishes on the updates topic
-  # (derived from the board name) — not Helper.topic(), which is the events
+  # (derived from the board name) - not Helper.topic(), which is the events
   # topic this board consumes.
   defp notify(event) do
     Phoenix.PubSub.local_broadcast(ScoreBoard.PubSub, updates_topic(Helper.name()), event)

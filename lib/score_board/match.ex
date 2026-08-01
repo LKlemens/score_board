@@ -7,7 +7,7 @@ defmodule ScoreBoard.Match do
   events this process broadcasts on `topic/0`.
 
   If the owning node dies, Horde restarts the match on a surviving node,
-  where `init/1` re-seeds the score from that node's derived board — the
+  where `init/1` re-seeds the score from that node's derived board - the
   best information available without a persistence layer (stale if that
   board had missed events).
   """
@@ -28,7 +28,7 @@ defmodule ScoreBoard.Match do
   end
 
   @doc """
-  Topic carrying `{:match_created, id}` and `{:goal, id, team}` events —
+  Topic carrying `{:match_created, id}` and `{:goal, id, team}` events -
   on `ScoreBoard.EchoPubSub`, because these events must not be lost.
   """
   @spec topic() :: String.t()

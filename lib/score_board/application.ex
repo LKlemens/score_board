@@ -15,8 +15,8 @@ defmodule ScoreBoard.Application do
       {Cluster.Supervisor, [topologies, [name: ScoreBoard.ClusterSupervisor]]},
       {DNSCluster, query: Application.get_env(:score_board, :dns_cluster_query) || :ignore},
       # Two PubSub instances side by side: the default (PG2) one carries
-      # transient traffic — LiveView internals and the boards' local UI
-      # notifications — while the EchoPubSub one carries the domain events
+      # transient traffic - LiveView internals and the boards' local UI
+      # notifications - while the EchoPubSub one carries the domain events
       # that need at-least-once delivery. A blip halts only the event
       # stream; the UI stays live.
       Supervisor.child_spec({Phoenix.PubSub, name: ScoreBoard.PubSub}, id: ScoreBoard.PubSub),

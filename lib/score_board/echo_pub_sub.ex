@@ -20,7 +20,7 @@ defmodule ScoreBoard.EchoPubSub do
 
   Besides the topic's own events, subscribers also receive
   `{:cursor_expired, node}` when this node fell off a remote producer's
-  ring buffer — the signal to reload from a source of truth.
+  ring buffer - the signal to reload from a source of truth.
   """
   @spec subscribe(String.t()) :: :ok | {:error, term()}
   def subscribe(topic) do

@@ -4,7 +4,7 @@ defmodule ScoreBoardWeb.ScoreLive do
 
   Score a goal anywhere and watch all boards converge; a node that missed
   events shows a red, lagging cell next to the true score. Remote boards
-  are read over `:erpc` — distribution, not PubSub — so the observation
+  are read over `:erpc` - distribution, not PubSub - so the observation
   channel stays reliable even when the PubSub layer is degraded: stale
   boards cannot be demonstrated through the same channel that drops the
   data.
@@ -13,9 +13,11 @@ defmodule ScoreBoardWeb.ScoreLive do
 
   alias ScoreBoard.Blip
   alias ScoreBoard.Board
+  alias ScoreBoard.Cluster
   alias ScoreBoard.Matches
+  alias ScoreBoardWeb.ClusterViz
 
-  @poll_interval 1_000
+  @poll_interval 500
   @remote_timeout 500
 
   @impl Phoenix.LiveView
@@ -100,7 +102,13 @@ defmodule ScoreBoardWeb.ScoreLive do
 
   defp refresh(socket) do
     nodes = Enum.sort([node() | Node.list()])
-    boards = Map.new(nodes, &{&1, board_on(&1)})
+    cluster = Map.new(nodes, &{&1, snapshot_on(&1)})
+
+    boards =
+      Map.new(cluster, fn
+        {board_node, :unreachable} -> {board_node, :unreachable}
+        {board_node, snapshot} -> {board_node, snapshot.scores}
+      end)
 
     matches =
       boards
@@ -113,13 +121,13 @@ defmodule ScoreBoardWeb.ScoreLive do
       |> Enum.sort()
       |> Enum.map(fn id -> %{id: id, owner: owner(id), true_score: true_score(id)} end)
 
-    assign(socket, nodes: nodes, boards: boards, matches: matches)
+    assign(socket, nodes: nodes, cluster: cluster, boards: boards, matches: matches)
   end
 
-  defp board_on(board_node) when board_node == node(), do: Board.scores()
+  defp snapshot_on(board_node) when board_node == node(), do: Cluster.snapshot()
 
-  defp board_on(board_node) do
-    :erpc.call(board_node, Board, :scores, [], @remote_timeout)
+  defp snapshot_on(board_node) do
+    :erpc.call(board_node, Cluster, :snapshot, [], @remote_timeout)
   catch
     # A node can vanish between listing and reading.
     _kind, _reason -> :unreachable
@@ -149,7 +157,7 @@ defmodule ScoreBoardWeb.ScoreLive do
   defp fmt(nil), do: "—"
   defp fmt(%{home: home, away: away}), do: "#{home} : #{away}"
 
-  # A cell is stale when the truth is known and this board disagrees —
+  # A cell is stale when the truth is known and this board disagrees -
   # including a missing row (the board never saw the match).
   defp stale?(_cell, nil), do: false
   defp stale?(cell, truth), do: cell != truth
@@ -170,6 +178,8 @@ defmodule ScoreBoardWeb.ScoreLive do
             {if @blip, do: "offline", else: "connected"}
           </span>
         </div>
+
+        <ClusterViz.cluster_viz nodes={@nodes} cluster={@cluster} node={@node} />
 
         <form phx-submit="create" class="flex justify-center gap-2">
           <input
@@ -242,7 +252,7 @@ defmodule ScoreBoardWeb.ScoreLive do
           </table>
         </div>
         <p :if={@matches == []} class="text-center opacity-70">
-          No matches yet — create one above.
+          No matches yet - create one above.
         </p>
 
         <div class="divider">Network</div>

@@ -5,7 +5,7 @@ defmodule ScoreBoard.Blip do
   While a blip is on, this node's EchoPubSub worker rejects incoming
   batches *below the ack*: remote producers keep their cursors, buffer the
   messages, and replay them in order once the blip ends. Nothing is
-  dropped at the application level — hold a blip long enough to overflow a
+  dropped at the application level - hold a blip long enough to overflow a
   producer's ring buffer and this node gets `{:cursor_expired, node}`
   instead, the signal to reload from a source of truth.
   """
