@@ -61,11 +61,13 @@ an *offline* badge marks an unreachable node.
 2. Click goal buttons from either tab: the goal is routed to the owning
    match process, wherever it runs, and every node's board converges.
 3. Failover: kill the node that owns a match (`Ctrl+C` twice in its
-   terminal). Horde restarts the match on the survivor, which re-seeds the
-   score from the survivor's derived board - refresh the surviving tab and
-   the match is still there, owned by the survivor, score intact. (If the
-   survivor's board had missed events, the restored score is its best
-   available view - there is no persistence layer.)
+   terminal). Horde restarts the match on the survivor, which reads its
+   score back from `ScoreBoard.DB` — a single cluster-wide process
+   simulating a database that matches write through to on every goal. The
+   DB itself rides the same Horde supervisor: if its host dies it is
+   restarted on a survivor — empty, being in-memory — and restarted
+   matches then fall back to the survivor's derived board while goals
+   refill the DB.
 4. Network blip (EchoPubSub): press *Go offline* on node B - its worker now
    rejects incoming batches *below the ack*, so remote producers buffer and
    retry. **Blip a node that does not own the match you score**: events for

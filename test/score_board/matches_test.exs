@@ -55,7 +55,7 @@ defmodule ScoreBoard.MatchesTest do
     assert {:error, :match_not_found} = Matches.owner_node(id)
   end
 
-  test "a restarted match re-seeds its score from the local board", %{id: id} do
+  test "a restarted match re-seeds its score from the DB", %{id: id} do
     :ok = Matches.create_match(id)
     :ok = Matches.score_goal(id, :home)
     :ok = Matches.score_goal(id, :away)

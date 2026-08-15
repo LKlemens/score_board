@@ -27,17 +27,25 @@ defmodule ScoreBoard.Application do
          name: ScoreBoard.EchoPubSub, adapter: EchoPubSub, pool_size: 1, buffer_size: 20},
         id: ScoreBoard.EchoPubSub
       ),
-      {Task.Supervisor, name: ScoreBoard.TaskSupervisor},
       {Horde.Registry, name: ScoreBoard.MatchRegistry, keys: :unique, members: :auto},
-      # The board must exist before Horde can place match processes here:
-      # a restarted match reads this node's board in init/1 to restore its
-      # score. It also subscribes to PubSub, so it starts after that too.
-      ScoreBoard.Board,
+      # Matches start before the board; the board's boot reload then pulls
+      # all scores from the DB in one read
       {Horde.DynamicSupervisor,
-       name: ScoreBoard.MatchSupervisor, strategy: :one_for_one, members: :auto},
+       name: ScoreBoard.MatchSupervisor,
+       strategy: :one_for_one,
+       members: :auto,
+       process_redistribution: :passive},
+      {Horde.DynamicSupervisor,
+       name: ScoreBoard.DBSupervisor,
+       strategy: :one_for_one,
+       members: :auto,
+       process_redistribution: :active},
+      # One DB in the whole cluster; started onto ScoreBoard.DBSupervisor
+      Supervisor.child_spec({Task, &ScoreBoard.DB.ensure_started/0}, id: :db_starter),
       # One-shot seeding of configured matches; a :temporary Task, so a
       # boot race with a peer node seeding the same ids cannot cycle the tree
-      {Task, &ScoreBoard.Matches.create_prefilled/0},
+      Supervisor.child_spec({Task, &ScoreBoard.Matches.create_prefilled/0}, id: :seeder),
+      ScoreBoard.Board,
       # Start to serve requests, typically the last entry
       ScoreBoardWeb.Endpoint
     ]

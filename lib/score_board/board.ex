@@ -5,7 +5,7 @@ defmodule ScoreBoard.Board do
   Subscribes to match events and folds them into a public-read ETS table.
   This is deliberately a cache: a missed event leaves this node's board
   permanently wrong - the failure mode the demo showcases. `reload/1`
-  rebuilds the table from the true scores held by the match processes.
+  rebuilds the table from the scores stored in `ScoreBoard.DB`.
 
   Writes serialize through the GenServer; reads go straight to ETS.
 
@@ -18,6 +18,7 @@ defmodule ScoreBoard.Board do
 
   require Logger
 
+  alias ScoreBoard.DB
   alias ScoreBoard.EchoPubSub
   alias ScoreBoard.Match
   alias ScoreBoard.Matches
@@ -103,14 +104,26 @@ defmodule ScoreBoard.Board do
     # notifications stay on the default (PG2) instance below.
     :ok = EchoPubSub.subscribe(Helper.topic())
     # No state: the table and topics resolve through the Helper effects,
-    # in this process too. Catch up on pre-existing matches via reload.
+    # in this process too. The boot reload reads the cluster DB, whose
+    # :global name is already synced by the time this node's tree starts.
     {:ok, nil, {:continue, :reload}}
   end
 
   @impl GenServer
   def handle_continue(:reload, state) do
-    do_reload()
+    attempt_boot_reload()
     {:noreply, state}
+  end
+
+  # The DB may still be starting (its starter task does not block the
+  # supervision tree) or its registration still syncing when this board
+  # boots; reload once it is visible.
+  defp attempt_boot_reload do
+    if DB.alive?() do
+      do_reload()
+    else
+      Process.send_after(self(), :retry_boot_reload, 500)
+    end
   end
 
   @impl GenServer
@@ -120,8 +133,16 @@ defmodule ScoreBoard.Board do
   end
 
   @impl GenServer
-  def handle_info({:match_created, id}, state) do
-    :ets.insert_new(Helper.name(), {id, 0, 0})
+  def handle_info(:retry_boot_reload, state) do
+    attempt_boot_reload()
+    {:noreply, state}
+  end
+
+  @impl GenServer
+  def handle_info({:match_created, id, %{home: home, away: away}}, state) do
+    # Overwrite, not insert_new: a restarted or moved match re-announces
+    # itself with its current score and the row must follow it.
+    :ets.insert(Helper.name(), {id, home, away})
     notify({:match_added, id})
     {:noreply, state}
   end
@@ -158,21 +179,19 @@ defmodule ScoreBoard.Board do
 
   # A goal for an unknown match proves this board missed events (it started
   # late or the events were lost), so counting from zero would bake the
-  # loss in. Recover from the source of truth instead - it already includes
-  # this goal, because matches bump state before broadcasting.
+  # loss in. Recover from the DB instead - it already includes this goal,
+  # because matches write through before broadcasting.
   defp recover_row(id) do
-    case Matches.score(id) do
+    case DB.read(id) do
       {:ok, %{home: home, away: away} = score} ->
         :ets.insert(Helper.name(), {id, home, away})
         notify({:match_added, id})
         notify({:score_updated, id, score})
 
-      {:error, :match_not_found} ->
-        # No reachable source of truth: fabricating a row would bake invalid
+      :error ->
+        # No entry to recover from: fabricating a row would bake invalid
         # state in. Drop the event; the next goal retries the recovery.
-        Logger.error(
-          "Board dropped goal for unknown match #{inspect(id)}: no reachable match process"
-        )
+        Logger.error("Board dropped goal for unknown match #{inspect(id)}: not in the DB")
     end
   end
 
@@ -180,30 +199,8 @@ defmodule ScoreBoard.Board do
   defp position(:away), do: 3
 
   defp do_reload do
-    ids = Matches.list_matches()
-
-    results =
-      Task.Supervisor.async_stream_nolink(
-        ScoreBoard.TaskSupervisor,
-        ids,
-        &Matches.score/1,
-        on_timeout: :kill_task
-      )
-
-    # Inserts stay in the Board process: the table is protected, tasks only
-    # perform the (possibly remote) calls. Zipping keeps the id available
-    # for results that carry none (task exits/timeouts).
-    ids
-    |> Enum.zip(results)
-    |> Enum.each(fn
-      {id, {:ok, {:ok, %{home: home, away: away}}}} ->
-        :ets.insert(Helper.name(), {id, home, away})
-
-      {id, {:ok, {:error, :match_not_found}}} ->
-        Logger.warning("Board reload skipped match #{inspect(id)}: no reachable match process")
-
-      {id, {:exit, reason}} ->
-        Logger.warning("Board reload skipped match #{inspect(id)}: #{inspect(reason)}")
+    Enum.each(DB.all(), fn {id, %{home: home, away: away}} ->
+      :ets.insert(Helper.name(), {id, home, away})
     end)
 
     notify(:board_reloaded)

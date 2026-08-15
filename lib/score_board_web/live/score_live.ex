@@ -154,7 +154,7 @@ defmodule ScoreBoardWeb.ScoreLive do
     end
   end
 
-  defp fmt(nil), do: "—"
+  defp fmt(nil), do: "-"
   defp fmt(%{home: home, away: away}), do: "#{home} : #{away}"
 
   # A cell is stale when the truth is known and this board disagrees -

@@ -17,6 +17,7 @@ defmodule ScoreBoard.Matches do
       {:ok, %{home: 1, away: 0}}
   """
 
+  alias ScoreBoard.DB
   alias ScoreBoard.Match
 
   @registry ScoreBoard.MatchRegistry
@@ -32,10 +33,24 @@ defmodule ScoreBoard.Matches do
   """
   @spec create_match(match_id()) :: :ok | {:error, :already_exists}
   def create_match(id) when is_binary(id) do
+    seed_score(id)
+
     case Horde.DynamicSupervisor.start_child(@supervisor, {Match, id}) do
       {:ok, _pid} -> :ok
       {:error, {:already_started, _pid}} -> {:error, :already_exists}
       :ignore -> {:error, :already_exists}
+    end
+  end
+
+  # Match.init reads its score from the DB and crashes on a missing row, so
+  # a brand-new match needs its 0:0 in place before it starts. Seed only
+  # when absent: a re-create (peer node or earlier boot) must not clobber a
+  # score already recorded.
+  @spec seed_score(match_id()) :: :ok | :error
+  defp seed_score(id) do
+    case DB.read(id) do
+      :error -> DB.write(id, %{home: 0, away: 0})
+      {:ok, _score} -> :ok
     end
   end
 

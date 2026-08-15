@@ -29,7 +29,7 @@ defmodule ScoreBoard.BoardTest do
   end
 
   test "derives rows from match_created and goal events", %{id: id, board: board} do
-    broadcast({:match_created, id})
+    broadcast({:match_created, id, %{home: 0, away: 0}})
     broadcast({:goal, id, :home})
     sync(board)
 
@@ -38,8 +38,7 @@ defmodule ScoreBoard.BoardTest do
   end
 
   @tag capture_log: true
-  test "drops a goal for an unknown match with no reachable match process",
-       %{id: id, board: board} do
+  test "drops a goal for an unknown match with no DB entry", %{id: id, board: board} do
     :ok = Board.subscribe()
 
     broadcast({:goal, id, :away})
@@ -58,7 +57,8 @@ defmodule ScoreBoard.BoardTest do
     :ok = Matches.score_goal(id, :home)
 
     # This board saw none of the above (it listens on its own topic); the
-    # next goal forces it to recover the true score, not count from zero.
+    # next goal forces it to recover the true score from the DB (matches
+    # write through on every goal), not count from zero.
     broadcast({:goal, id, :away})
     sync(board)
 
@@ -68,7 +68,7 @@ defmodule ScoreBoard.BoardTest do
   test "notifies local subscribers after each applied event", %{id: id} do
     :ok = Board.subscribe()
 
-    broadcast({:match_created, id})
+    broadcast({:match_created, id, %{home: 0, away: 0}})
     assert_receive {:match_added, ^id}
 
     broadcast({:goal, id, :home})
@@ -80,7 +80,7 @@ defmodule ScoreBoard.BoardTest do
     :ok = Matches.score_goal(id, :home)
 
     # Diverge this board: a creation and a forged goal the match never saw.
-    broadcast({:match_created, id})
+    broadcast({:match_created, id, %{home: 0, away: 0}})
     broadcast({:goal, id, :away})
     sync(board)
     assert {:ok, %{home: 0, away: 1}} = Board.fetch_score(id)
@@ -95,7 +95,7 @@ defmodule ScoreBoard.BoardTest do
     :ok = Matches.score_goal(id, :home)
 
     # Diverge this board, then simulate falling off a producer's buffer.
-    broadcast({:match_created, id})
+    broadcast({:match_created, id, %{home: 0, away: 0}})
     broadcast({:goal, id, :away})
     sync(board)
     assert {:ok, %{home: 0, away: 1}} = Board.fetch_score(id)
