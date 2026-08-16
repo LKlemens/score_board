@@ -40,11 +40,15 @@ defmodule ScoreBoard.Application do
        strategy: :one_for_one,
        members: :auto,
        process_redistribution: :active},
-      # One DB in the whole cluster; started onto ScoreBoard.DBSupervisor
-      Supervisor.child_spec({Task, &ScoreBoard.DB.ensure_started/0}, id: :db_starter),
-      # One-shot seeding of configured matches; a :temporary Task, so a
-      # boot race with a peer node seeding the same ids cannot cycle the tree
-      Supervisor.child_spec({Task, &ScoreBoard.Matches.create_prefilled/0}, id: :seeder),
+      # Bring the one cluster-wide DB up, then seed configured matches
+      Supervisor.child_spec(
+        {Task,
+         fn ->
+           ScoreBoard.DB.ensure_started()
+           ScoreBoard.Matches.create_prefilled()
+         end},
+        id: :boot
+      ),
       ScoreBoard.Board,
       # Start to serve requests, typically the last entry
       ScoreBoardWeb.Endpoint
