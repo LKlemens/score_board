@@ -34,12 +34,12 @@ defmodule ScoreBoard.Application do
        name: ScoreBoard.MatchSupervisor,
        strategy: :one_for_one,
        members: :auto,
-       process_redistribution: :passive},
+       process_redistribution: :active},
       {Horde.DynamicSupervisor,
        name: ScoreBoard.DBSupervisor,
        strategy: :one_for_one,
        members: :auto,
-       process_redistribution: :active},
+       process_redistribution: :passive},
       # Bring the one cluster-wide DB up, then seed configured matches
       Supervisor.child_spec(
         {Task,

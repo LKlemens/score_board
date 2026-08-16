@@ -8,10 +8,10 @@ defmodule ScoreBoard.Match do
   their copies from.
 
   On (re)start - including a Horde failover or rebalance to another node -
-  `init/1` reads the score back from the DB and announces itself with
-  `{:match_created, id, score}`, so every board refreshes its row. The read
-  must succeed: a missing or unreachable DB entry crashes the match rather
-  than resurrecting it with a guessed score.
+  `init/1` waits for the DB to be resolvable, reads the score back, and
+  announces itself with `{:match_created, id, score}`, so every board refreshes
+  its row. A reachable DB with no row for the match is a genuine error and
+  crashes it rather than resurrecting it with a guessed score.
   """
   use GenServer, restart: :transient
 
@@ -74,6 +74,11 @@ defmodule ScoreBoard.Match do
   end
 
   defp restore_score(id) do
+    # A match can start on a just-joined node (Horde redistribution/failover)
+    # whose registry has not synced the DB yet; wait for it to be resolvable
+    # so a transient miss does not look like an absent row. A reachable DB with
+    # no row is a genuine error and still crashes - matches are seeded first.
+    :ok = DB.await_ready()
     {:ok, score} = DB.read(id)
     score
   end

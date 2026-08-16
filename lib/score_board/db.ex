@@ -37,7 +37,7 @@ defmodule ScoreBoard.DB do
     # (Horde's registry is eventually consistent); starting a duplicate
     # would let fresh boards reload from an empty copy, so give the
     # registry a moment first.
-    if Node.list() != [], do: await_registration(20)
+    if Node.list() != [], do: await_ready()
 
     if alive?() do
       :ok
@@ -112,14 +112,25 @@ defmodule ScoreBoard.DB do
   # goals, whichever copy was further ahead.
   defp max_score(a, b), do: %{home: max(a.home, b.home), away: max(a.away, b.away)}
 
-  defp await_registration(0), do: :ok
+  @doc """
+  Blocks until the cluster-wide DB is resolvable from this node, or the retry
+  budget runs out (returns `:ok` either way).
 
-  defp await_registration(retries) do
+  Horde's registry is eventually consistent, so on a just-joined node the `:db`
+  name can be briefly invisible - a read then would fail spuriously. Callers
+  that must read the DB (a (re)starting match, boot seeding) wait on this first.
+  """
+  @spec await_ready(non_neg_integer()) :: :ok
+  def await_ready(retries \\ 20)
+
+  def await_ready(0), do: :ok
+
+  def await_ready(retries) do
     if alive?() do
       :ok
     else
       Process.sleep(150)
-      await_registration(retries - 1)
+      await_ready(retries - 1)
     end
   end
 
