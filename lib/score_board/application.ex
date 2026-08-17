@@ -34,18 +34,22 @@ defmodule ScoreBoard.Application do
        name: ScoreBoard.MatchSupervisor,
        strategy: :one_for_one,
        members: :auto,
+       distribution_strategy: ScoreBoard.RoundRobinDistribution,
        process_redistribution: :active},
       {Horde.DynamicSupervisor,
        name: ScoreBoard.DBSupervisor,
        strategy: :one_for_one,
        members: :auto,
        process_redistribution: :passive},
-      # Bring the one cluster-wide DB up, then seed configured matches
+      # Bring the one cluster-wide DB up, then claim one match for this node
       Supervisor.child_spec(
         {Task,
          fn ->
-           ScoreBoard.DB.ensure_started()
-           ScoreBoard.Matches.create_prefilled()
+           ScoreBoard.DB.ensure_started() |> dbg()
+
+           if Application.get_env(:score_board, :auto_claim_match, true) do
+             ScoreBoard.Matches.claim_one()
+           end
          end},
         id: :boot
       ),

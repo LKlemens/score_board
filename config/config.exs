@@ -10,9 +10,6 @@ import Config
 config :score_board,
   generators: [timestamp_type: :utc_datetime]
 
-# Matches created automatically on every node at boot (idempotent)
-config :score_board, :prefilled_matches, ["POL-GER", "ESP-FRA", "BRA-ARG"]
-
 # Compile echo_pubsub's fault-injection hook into this app's build so the
 # UI blip button can make the local worker reject incoming batches
 config :echo_pubsub, :enable_fault_injection, true

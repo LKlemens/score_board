@@ -17,11 +17,21 @@ defmodule ScoreBoard.Matches do
       {:ok, %{home: 1, away: 0}}
   """
 
+  require Logger
+
   alias ScoreBoard.DB
   alias ScoreBoard.Match
 
   @registry ScoreBoard.MatchRegistry
   @supervisor ScoreBoard.MatchSupervisor
+
+  # The fixtures a node can claim at startup. Each node takes one; a name
+  # already taken by a peer is skipped, so N nodes host N distinct matches.
+  @match_pool ~w(
+    POL-GER ESP-FRA BRA-ARG ENG-ITA NED-POR BEL-CRO URU-COL MEX-USA JPN-KOR
+    SEN-MAR SUI-SWE DEN-NOR AUT-CZE SCO-WAL GRE-TUR UKR-SRB NGA-GHA CHI-PER
+    ECU-PAR CAN-AUS
+  )
 
   @type match_id :: String.t()
 
@@ -32,10 +42,20 @@ defmodule ScoreBoard.Matches do
   fails, regardless of which node it runs on.
   """
   @spec create_match(match_id()) :: :ok | {:error, :already_exists}
-  def create_match(id) when is_binary(id) do
-    seed_score(id)
+  def create_match(id) when is_binary(id), do: create_match(id, :erlang.phash2(id))
 
-    case Horde.DynamicSupervisor.start_child(@supervisor, {Match, id}) do
+  @doc """
+  Starts a match with an explicit placement ordinal.
+
+  The `index` drives node placement via `ScoreBoard.RoundRobinDistribution`
+  (0..n-1 spreads one-per-node across n nodes); it has no effect on the
+  match's behaviour.
+  """
+  @spec create_match(match_id(), non_neg_integer()) :: :ok | {:error, :already_exists}
+  def create_match(id, index) when is_binary(id) and is_integer(index) do
+    seed_score(id) |> dbg()
+
+    case Horde.DynamicSupervisor.start_child(@supervisor, {Match, {id, index}}) do
       {:ok, _pid} -> :ok
       {:error, {:already_started, _pid}} -> {:error, :already_exists}
       :ignore -> {:error, :already_exists}
@@ -61,16 +81,35 @@ defmodule ScoreBoard.Matches do
   end
 
   @doc """
-  Creates all matches listed under `config :score_board, :prefilled_matches`.
+  Claims this node's fixture from `@match_pool` and places it on this node.
 
-  Runs on every node at boot; idempotent - matches that already exist
-  (created by a peer node or an earlier boot) are skipped.
+  Deterministic: the node at ordinal `i` (its slot among the sorted members)
+  takes `@match_pool` entry `i`, which `RoundRobinDistribution` also maps back
+  to this node. Returns `{:error, :pool_exhausted}` (and logs) when there are
+  more nodes than fixtures.
   """
-  @spec create_prefilled() :: :ok
-  def create_prefilled do
-    :score_board
-    |> Application.get_env(:prefilled_matches, [])
-    |> Enum.each(&create_match/1)
+  @spec claim_one() :: {:ok, match_id()} | {:error, :pool_exhausted}
+  def claim_one do
+    index = node_ordinal()
+
+    case Enum.at(@match_pool, index) do
+      nil ->
+        Logger.warning("No fixture for node ordinal #{index}; pool of #{length(@match_pool)} exhausted")
+        {:error, :pool_exhausted}
+
+      id ->
+        # :ok, or a boot-race :already_exists, both leave this slot's match up.
+        _ = create_match(id, index)
+        {:ok, id}
+    end
+  end
+
+  # This node's slot among the sorted members. RoundRobinDistribution maps
+  # that ordinal back to this same node, so the claimed match runs locally.
+  defp node_ordinal do
+    [node() | Node.list()]
+    |> Enum.sort()
+    |> Enum.find_index(&(&1 == node()))
   end
 
   @doc "Scores a goal on the match process, wherever it runs."

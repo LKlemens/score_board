@@ -24,8 +24,10 @@ defmodule ScoreBoard.Match do
   @type team :: :home | :away
   @type score :: %{home: non_neg_integer(), away: non_neg_integer()}
 
-  @spec start_link(Matches.match_id()) :: GenServer.on_start()
-  def start_link(id) do
+  # The index is placement-only (see ScoreBoard.RoundRobinDistribution) and
+  # is ignored here - init/1 works from the id alone.
+  @spec start_link({Matches.match_id(), non_neg_integer()}) :: GenServer.on_start()
+  def start_link({id, _index}) do
     GenServer.start_link(__MODULE__, id, name: Matches.via(id))
   end
 
@@ -79,7 +81,7 @@ defmodule ScoreBoard.Match do
     # so a transient miss does not look like an absent row. A reachable DB with
     # no row is a genuine error and still crashes - matches are seeded first.
     :ok = DB.await_ready()
-    {:ok, score} = DB.read(id)
+    {:ok, score} = DB.read(id) |> dbg()
     score
   end
 end

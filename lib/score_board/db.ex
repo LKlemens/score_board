@@ -33,12 +33,6 @@ defmodule ScoreBoard.DB do
   """
   @spec ensure_started() :: :ok
   def ensure_started do
-    # A just-joined node may not have synced an existing registration yet
-    # (Horde's registry is eventually consistent); starting a duplicate
-    # would let fresh boards reload from an empty copy, so give the
-    # registry a moment first.
-    if Node.list() != [], do: await_ready()
-
     if alive?() do
       :ok
     else
@@ -119,18 +113,26 @@ defmodule ScoreBoard.DB do
   Horde's registry is eventually consistent, so on a just-joined node the `:db`
   name can be briefly invisible - a read then would fail spuriously. Callers
   that must read the DB (a (re)starting match, boot seeding) wait on this first.
+
+  Leads with a `:db_settle_ms` sleep (default 300): `alive?/0` turns true the
+  instant *any* `:db` is visible, including an empty split-brain duplicate, so
+  the settle gives Horde's `name_conflict` merge room to converge on the real
+  copy before the caller reads.
   """
   @spec await_ready(non_neg_integer()) :: :ok
-  def await_ready(retries \\ 20)
+  def await_ready(retries \\ 20) do
+    Process.sleep(Application.get_env(:score_board, :db_settle_ms, 300))
+    wait_ready(retries)
+  end
 
-  def await_ready(0), do: :ok
+  defp wait_ready(0), do: :ok
 
-  def await_ready(retries) do
+  defp wait_ready(retries) do
     if alive?() do
       :ok
     else
       Process.sleep(150)
-      await_ready(retries - 1)
+      wait_ready(retries - 1)
     end
   end
 
@@ -139,6 +141,6 @@ defmodule ScoreBoard.DB do
   defp safe_call(request, fallback) do
     GenServer.call(@name, request)
   catch
-    :exit, _reason -> fallback
+    :exit, _reason -> fallback |> dbg()
   end
 end

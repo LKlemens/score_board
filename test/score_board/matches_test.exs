@@ -36,17 +36,16 @@ defmodule ScoreBoard.MatchesTest do
     end)
   end
 
-  test "create_prefilled/0 seeds configured matches idempotently", %{id: id} do
-    # Only this test touches the (test-env empty) :prefilled_matches key.
-    Application.put_env(:score_board, :prefilled_matches, [id])
-    on_exit(fn -> Application.put_env(:score_board, :prefilled_matches, []) end)
+  test "claim_one/0 claims this node's fixture, idempotently" do
+    node = node()
 
-    assert :ok = Matches.create_prefilled()
-    assert id in Matches.list_matches()
+    assert {:ok, claimed} = Matches.claim_one()
+    assert claimed in Matches.list_matches()
+    assert {:ok, ^node} = Matches.owner_node(claimed)
+    assert {:ok, %{home: 0, away: 0}} = Matches.score(claimed)
 
-    # A peer node booting later reruns the seeding without harm.
-    assert :ok = Matches.create_prefilled()
-    assert {:ok, %{home: 0, away: 0}} = Matches.score(id)
+    # Deterministic by node ordinal: re-claiming yields the same fixture.
+    assert {:ok, ^claimed} = Matches.claim_one()
   end
 
   test "unknown matches return errors", %{id: id} do
