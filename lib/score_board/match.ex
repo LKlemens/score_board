@@ -9,7 +9,7 @@ defmodule ScoreBoard.Match do
 
   On (re)start - including a Horde failover or rebalance to another node -
   `init/1` waits for the DB to be resolvable, reads the score back, and
-  announces itself with `{:match_created, id, score}`, so every board refreshes
+  announces itself with `{:match_created, id, score, pid}`, so every board refreshes
   its row. A reachable DB with no row for the match is a genuine error and
   crashes it rather than resurrecting it with a guessed score.
   """
@@ -32,7 +32,7 @@ defmodule ScoreBoard.Match do
   end
 
   @doc """
-  Topic carrying `{:match_created, id, score}` and `{:goal, id, team}`
+  Topic carrying `{:match_created, id, score, pid}` and `{:goal, id, team}`
   events - on `ScoreBoard.EchoPubSub`, because these events must not be
   lost.
   """
@@ -46,7 +46,8 @@ defmodule ScoreBoard.Match do
     Process.flag(:trap_exit, true)
 
     score = restore_score(id)
-    :ok = EchoPubSub.broadcast(@topic, {:match_created, id, score})
+    # Carry the pid so boards monitor the exact process without racing the registry.
+    :ok = EchoPubSub.broadcast(@topic, {:match_created, id, score, self()})
     {:ok, %{id: id, score: score}}
   end
 

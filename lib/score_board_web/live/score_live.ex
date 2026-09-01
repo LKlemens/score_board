@@ -80,6 +80,7 @@ defmodule ScoreBoardWeb.ScoreLive do
   def handle_info({:nodeup, _node}, socket), do: {:noreply, refresh(socket)}
   def handle_info({:nodedown, _node}, socket), do: {:noreply, refresh(socket)}
   def handle_info({:match_added, _id}, socket), do: {:noreply, refresh(socket)}
+  def handle_info({:match_removed, _id}, socket), do: {:noreply, refresh(socket)}
   def handle_info({:score_updated, _id, _score}, socket), do: {:noreply, refresh(socket)}
   def handle_info(:board_reloaded, socket), do: {:noreply, refresh(socket)}
 

@@ -103,62 +103,57 @@ defmodule ScoreBoard.Board do
     # Match events ride the EchoPubSub instance; the board's own update
     # notifications stay on the default (PG2) instance below.
     :ok = EchoPubSub.subscribe(Helper.topic())
-    # No state: the table and topics resolve through the Helper effects,
-    # in this process too. The boot reload reads the cluster DB, whose
-    # :global name is already synced by the time this node's tree starts.
-    {:ok, nil, {:continue, :reload}}
+    # State holds the match monitors (both directions); the table and topics
+    # still resolve through the Helper effects.
+    {:ok, %{by_ref: %{}, by_id: %{}}, {:continue, :reload}}
   end
 
   @impl GenServer
   def handle_continue(:reload, state) do
-    attempt_boot_reload()
-    {:noreply, state}
+    {:noreply, attempt_boot_reload(state)}
   end
 
   # The DB may still be starting (its starter task does not block the
   # supervision tree) or its registration still syncing when this board
   # boots; reload once it is visible.
-  defp attempt_boot_reload do
+  defp attempt_boot_reload(state) do
     if DB.alive?() do
-      do_reload()
+      do_reload(state)
     else
       Process.send_after(self(), :retry_boot_reload, 500)
+      state
     end
   end
 
   @impl GenServer
   def handle_call(:reload, _from, state) do
-    do_reload()
-    {:reply, :ok, state}
+    {:reply, :ok, do_reload(state)}
   end
 
   @impl GenServer
   def handle_info(:retry_boot_reload, state) do
-    attempt_boot_reload()
-    {:noreply, state}
+    {:noreply, attempt_boot_reload(state)}
   end
 
   @impl GenServer
-  def handle_info({:match_created, id, %{home: home, away: away}}, state) do
+  def handle_info({:match_created, id, %{home: home, away: away}, pid}, state) do
     # Overwrite, not insert_new: a restarted or moved match re-announces
     # itself with its current score and the row must follow it.
     :ets.insert(Helper.name(), {id, home, away})
     notify({:match_added, id})
-    {:noreply, state}
+    {:noreply, monitor_match(id, pid, state)}
   end
 
   @impl GenServer
   def handle_info({:goal, id, team}, state) do
-    apply_goal(id, team)
-    {:noreply, state}
+    {:noreply, apply_goal(id, team, state)}
   end
 
   @impl GenServer
   def handle_info(:db_merged, state) do
     # The DB absorbed a split-brain copy's rows; reload to backfill any we missed.
     Logger.info("DB merged after split-brain; reloading board")
-    do_reload()
-    {:noreply, state}
+    {:noreply, do_reload(state)}
   end
 
   @impl GenServer
@@ -169,19 +164,34 @@ defmodule ScoreBoard.Board do
       "Board fell behind producer on #{inspect(from_node)}; reloading from match processes"
     )
 
-    do_reload()
-    {:noreply, state}
+    {:noreply, do_reload(state)}
   end
 
-  defp apply_goal(id, team) do
+  @impl GenServer
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
+    # A monitored match died: drop its row. A failover/rebalance restart
+    # re-announces via match_created, which adds the row back.
+    case Map.pop(state.by_ref, ref) do
+      {nil, _} ->
+        {:noreply, state}
+
+      {id, by_ref} ->
+        :ets.delete(Helper.name(), id)
+        notify({:match_removed, id})
+        {:noreply, %{state | by_ref: by_ref, by_id: Map.delete(state.by_id, id)}}
+    end
+  end
+
+  defp apply_goal(id, team, state) do
     case fetch_score(id) do
       {:ok, _score} ->
         :ets.update_counter(Helper.name(), id, {position(team), 1})
         {:ok, score} = fetch_score(id)
         notify({:score_updated, id, score})
+        state
 
       :error ->
-        recover_row(id)
+        recover_row(id, state)
     end
   end
 
@@ -189,30 +199,60 @@ defmodule ScoreBoard.Board do
   # late or the events were lost), so counting from zero would bake the
   # loss in. Recover from the DB instead - it already includes this goal,
   # because matches write through before broadcasting.
-  defp recover_row(id) do
+  defp recover_row(id, state) do
     case DB.read(id) do
       {:ok, %{home: home, away: away} = score} ->
         :ets.insert(Helper.name(), {id, home, away})
         notify({:match_added, id})
         notify({:score_updated, id, score})
+        monitor_match(id, nil, state)
 
       :error ->
         # No entry to recover from: fabricating a row would bake invalid
         # state in. Drop the event; the next goal retries the recovery.
         Logger.error("Board dropped goal for unknown match #{inspect(id)}: not in the DB")
+        state
     end
   end
 
   defp position(:home), do: 2
   defp position(:away), do: 3
 
-  defp do_reload do
-   DB.all()
-   |> Enum.each(fn {id, %{home: home, away: away}} ->
-      :ets.insert(Helper.name(), {id, home, away})
-    end) |> dbg()
+  defp do_reload(state) do
+    state =
+      Enum.reduce(DB.all(), state, fn {id, %{home: home, away: away}}, state ->
+        :ets.insert(Helper.name(), {id, home, away})
+        monitor_match(id, nil, state)
+      end)
 
     notify(:board_reloaded)
+    state
+  end
+
+  # Monitors the match process for `id` (looked up in the registry when no pid
+  # is given), replacing any previous monitor so the latest incarnation wins.
+  defp monitor_match(id, pid, state) do
+    state = demonitor(id, state)
+
+    case pid || GenServer.whereis(Matches.via(id)) do
+      pid when is_pid(pid) ->
+        ref = Process.monitor(pid)
+        %{state | by_ref: Map.put(state.by_ref, ref, id), by_id: Map.put(state.by_id, id, ref)}
+
+      _ ->
+        state
+    end
+  end
+
+  defp demonitor(id, state) do
+    case Map.pop(state.by_id, id) do
+      {nil, _} ->
+        state
+
+      {ref, by_id} ->
+        Process.demonitor(ref, [:flush])
+        %{state | by_id: by_id, by_ref: Map.delete(state.by_ref, ref)}
+    end
   end
 
   # local_broadcast: the derived board is per-node state - a stale board

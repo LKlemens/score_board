@@ -29,7 +29,7 @@ defmodule ScoreBoard.BoardTest do
   end
 
   test "derives rows from match_created and goal events", %{id: id, board: board} do
-    broadcast({:match_created, id, %{home: 0, away: 0}})
+    broadcast({:match_created, id, %{home: 0, away: 0}, self()})
     broadcast({:goal, id, :home})
     sync(board)
 
@@ -68,7 +68,7 @@ defmodule ScoreBoard.BoardTest do
   test "notifies local subscribers after each applied event", %{id: id} do
     :ok = Board.subscribe()
 
-    broadcast({:match_created, id, %{home: 0, away: 0}})
+    broadcast({:match_created, id, %{home: 0, away: 0}, self()})
     assert_receive {:match_added, ^id}
 
     broadcast({:goal, id, :home})
@@ -80,7 +80,7 @@ defmodule ScoreBoard.BoardTest do
     :ok = Matches.score_goal(id, :home)
 
     # Diverge this board: a creation and a forged goal the match never saw.
-    broadcast({:match_created, id, %{home: 0, away: 0}})
+    broadcast({:match_created, id, %{home: 0, away: 0}, self()})
     broadcast({:goal, id, :away})
     sync(board)
     assert {:ok, %{home: 0, away: 1}} = Board.fetch_score(id)
@@ -95,7 +95,7 @@ defmodule ScoreBoard.BoardTest do
     :ok = Matches.score_goal(id, :home)
 
     # Diverge this board, then simulate falling off a producer's buffer.
-    broadcast({:match_created, id, %{home: 0, away: 0}})
+    broadcast({:match_created, id, %{home: 0, away: 0}, self()})
     broadcast({:goal, id, :away})
     sync(board)
     assert {:ok, %{home: 0, away: 1}} = Board.fetch_score(id)
@@ -125,6 +125,21 @@ defmodule ScoreBoard.BoardTest do
       assert is_pid(new) and new != old
       assert {:ok, %{home: 1, away: 0}} = Board.fetch_score(id)
     end)
+  end
+
+  test "removes a match row when its monitored process dies", %{id: id} do
+    :ok = Board.subscribe()
+
+    # The board monitors the match process; when it dies the row is dropped.
+    match = spawn(fn -> Process.sleep(:infinity) end)
+    broadcast({:match_created, id, %{home: 0, away: 0}, match})
+    assert_receive {:match_added, ^id}
+    assert {:ok, %{home: 0, away: 0}} = Board.fetch_score(id)
+
+    Process.exit(match, :kill)
+
+    assert_receive {:match_removed, ^id}
+    assert :error = Board.fetch_score(id)
   end
 
   test "fetch_score/1 returns :error for unknown ids", %{id: id} do
