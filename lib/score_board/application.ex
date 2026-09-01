@@ -7,6 +7,9 @@ defmodule ScoreBoard.Application do
 
   @impl true
   def start(_type, _args) do
+    # Reap dead nodes in ~5s instead of the ~60s default so stale columns clear.
+    :net_kernel.set_net_ticktime(5)
+
     # LocalEpmd discovers every node registered with the local epmd daemon
     topologies = [local: [strategy: Cluster.Strategy.LocalEpmd]]
 
@@ -41,11 +44,13 @@ defmodule ScoreBoard.Application do
        strategy: :one_for_one,
        members: :auto,
        process_redistribution: :passive},
+      # Blocks 500ms so Horde's registry syncs the existing :db before boot.
+      {ScoreBoard.BootBarrier, 500},
       # Bring the one cluster-wide DB up, then claim one match for this node
       Supervisor.child_spec(
         {Task,
          fn ->
-           ScoreBoard.DB.ensure_started() |> dbg()
+           ScoreBoard.DB.ensure_started()
 
            if Application.get_env(:score_board, :auto_claim_match, true) do
              ScoreBoard.Matches.claim_one()

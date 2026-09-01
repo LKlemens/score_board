@@ -15,8 +15,11 @@ defmodule ScoreBoard.DB do
   """
   use GenServer, restart: :transient
 
+  alias ScoreBoard.EchoPubSub
   alias ScoreBoard.Match
   alias ScoreBoard.Matches
+
+  require Logger
 
   @name {:via, Horde.Registry, {ScoreBoard.MatchRegistry, :db}}
   @supervisor ScoreBoard.DBSupervisor
@@ -62,6 +65,7 @@ defmodule ScoreBoard.DB do
 
   @impl GenServer
   def init(:ok) do
+    Logger.warning("DB starting on #{node()}")
     # Trap exits so a Horde registry name conflict arrives as a message.
     Process.flag(:trap_exit, true)
     {:ok, %{}}
@@ -87,13 +91,19 @@ defmodule ScoreBoard.DB do
 
   @impl GenServer
   def handle_cast({:merge, other}, scores) do
-    {:noreply, Map.merge(scores, other, fn _id, a, b -> max_score(a, b) end)}
+    merged = Map.merge(scores, other, fn _id, a, b -> max_score(a, b) end)
+
+    # Tell boards to reload so they backfill rows only the losing copy had.
+    EchoPubSub.broadcast(Match.topic(), :db_merged)
+
+    {:noreply, merged}
   end
 
   @impl GenServer
   def handle_info({:EXIT, _pid, {:name_conflict, _key_value, _registry, winner}}, scores) do
     # A duplicate DB registered elsewhere and this copy lost: hand over
     # everything (max-merged there) and stop cleanly.
+    Logger.warning("DB lost name conflict to #{inspect(winner)}; merging scores and stopping")
     GenServer.cast(winner, {:merge, scores})
     {:stop, :normal, scores}
   end

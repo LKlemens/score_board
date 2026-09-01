@@ -154,6 +154,14 @@ defmodule ScoreBoard.Board do
   end
 
   @impl GenServer
+  def handle_info(:db_merged, state) do
+    # The DB absorbed a split-brain copy's rows; reload to backfill any we missed.
+    Logger.info("DB merged after split-brain; reloading board")
+    do_reload()
+    {:noreply, state}
+  end
+
+  @impl GenServer
   def handle_info({:cursor_expired, from_node}, state) do
     # This board fell off a producer's ring buffer: the gap is gone for
     # good, so rebuild from the source of truth instead of waiting.
@@ -199,9 +207,10 @@ defmodule ScoreBoard.Board do
   defp position(:away), do: 3
 
   defp do_reload do
-    Enum.each(DB.all(), fn {id, %{home: home, away: away}} ->
+   DB.all()
+   |> Enum.each(fn {id, %{home: home, away: away}} ->
       :ets.insert(Helper.name(), {id, home, away})
-    end)
+    end) |> dbg()
 
     notify(:board_reloaded)
   end
