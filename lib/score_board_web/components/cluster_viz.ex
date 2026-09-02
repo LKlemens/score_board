@@ -95,6 +95,29 @@ defmodule ScoreBoardWeb.ClusterViz do
         >
           {circle.label}
         </text>
+        <g
+          :if={circle.reachable?}
+          class="cursor-pointer"
+          phx-click="toggle-node"
+          phx-value-node={circle.node}
+        >
+          <rect
+            x={circle.x - 45}
+            y={circle.y + 50}
+            width="90"
+            height="22"
+            rx="6"
+            class={if circle.offline?, do: "fill-success", else: "fill-warning"}
+          />
+          <text
+            x={circle.x}
+            y={circle.y + 65}
+            text-anchor="middle"
+            class="fill-base-100 text-[11px] font-bold"
+          >
+            {if circle.offline?, do: "Back online", else: "Go offline"}
+          </text>
+        </g>
       </g>
     </svg>
     <p class="text-center text-xs opacity-60 -mt-2">
@@ -105,8 +128,8 @@ defmodule ScoreBoardWeb.ClusterViz do
     """
   end
 
-  defp svg_height(count) when count <= 2, do: 150
-  defp svg_height(_count), do: 330
+  defp svg_height(count) when count <= 2, do: 160
+  defp svg_height(_count), do: 360
 
   # One or two nodes sit on a line; three or more form a regular polygon
   # (triangle, square, pentagon, ...) with the first node on top.
@@ -146,12 +169,17 @@ defmodule ScoreBoardWeb.ClusterViz do
       {missing, capacity} = missing(cluster, viz_node)
       full? = capacity != nil and missing >= capacity
       label = short_name(viz_node) <> if viz_node == self_node, do: " (this)", else: ""
+      reachable? = status != :unreachable
+      offline? = reachable? and status.blip
 
       %{
         x: x,
         y: y,
         class: class,
         label: label,
+        node: Atom.to_string(viz_node),
+        reachable?: reachable?,
+        offline?: offline?,
         missing: min(missing, 999),
         missing_class: if(full?, do: "fill-error", else: "fill-warning")
       }

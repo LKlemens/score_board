@@ -66,9 +66,12 @@ defmodule ScoreBoardWeb.ScoreLive do
     {:noreply, assign(socket, blip: true)}
   end
 
-  def handle_event("toggle-blip", _params, socket) do
-    if Blip.enabled?(), do: Blip.off(), else: Blip.on()
-    {:noreply, assign(socket, blip: Blip.enabled?())}
+  def handle_event("toggle-node", %{"node" => node_str}, socket) do
+    target = String.to_existing_atom(node_str)
+    toggle_blip(target)
+    # Keep the header badge in step when this node was toggled.
+    socket = if target == node(), do: assign(socket, blip: Blip.enabled?()), else: socket
+    {:noreply, refresh(socket)}
   end
 
   @impl Phoenix.LiveView
@@ -123,6 +126,21 @@ defmodule ScoreBoardWeb.ScoreLive do
       |> Enum.map(fn id -> %{id: id, owner: owner(id), true_score: true_score(id)} end)
 
     assign(socket, nodes: nodes, cluster: cluster, boards: boards, matches: matches)
+  end
+
+  defp toggle_blip(target) when target == node() do
+    if Blip.enabled?(), do: Blip.off(), else: Blip.on()
+  end
+
+  defp toggle_blip(target) do
+    if :erpc.call(target, Blip, :enabled?, [], @remote_timeout) do
+      :erpc.call(target, Blip, :off, [], @remote_timeout)
+    else
+      :erpc.call(target, Blip, :on, [], @remote_timeout)
+    end
+  catch
+    # A node can vanish between listing and toggling.
+    _kind, _reason -> :ok
   end
 
   defp snapshot_on(board_node) when board_node == node(), do: Cluster.snapshot()
@@ -264,9 +282,6 @@ defmodule ScoreBoardWeb.ScoreLive do
           </button>
           <button class="btn btn-outline" phx-click="blip" phx-value-duration="5000">
             5s outage
-          </button>
-          <button class="btn btn-warning" phx-click="toggle-blip">
-            {if @blip, do: "Back online", else: "Go offline"}
           </button>
         </div>
       </div>

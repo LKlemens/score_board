@@ -62,14 +62,16 @@ defmodule ScoreBoardWeb.ScoreLiveTest do
     end)
   end
 
-  test "blip toggle flips fault injection and the badge", %{conn: conn} do
+  test "the per-node toggle flips this node's fault injection and the badge", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/")
 
-    view |> element("button", "Go offline") |> render_click()
+    toggle = ~s{#cluster-viz [phx-value-node="#{node()}"]}
+
+    view |> element(toggle) |> render_click()
     assert Blip.enabled?()
     assert view |> element("#net-status") |> render() =~ "offline"
 
-    view |> element("button", "Back online") |> render_click()
+    view |> element(toggle) |> render_click()
     refute Blip.enabled?()
     assert view |> element("#net-status") |> render() =~ "connected"
   end
