@@ -19,11 +19,10 @@ defmodule ScoreBoardWeb.ScoreLiveTest do
     view |> element(~s{[data-score-id="#{id}"]}) |> render()
   end
 
-  test "renders the node name and the create form", %{conn: conn} do
+  test "renders the node name", %{conn: conn} do
     {:ok, _view, html} = live(conn, ~p"/")
 
     assert html =~ Atom.to_string(node())
-    assert html =~ "Create match"
   end
 
   test "renders the cluster visualization with this node", %{conn: conn} do
@@ -34,20 +33,11 @@ defmodule ScoreBoardWeb.ScoreLiveTest do
     assert svg =~ node() |> Atom.to_string() |> String.split("@") |> hd()
   end
 
-  test "creating a match adds it to the board", %{conn: conn, id: id} do
-    {:ok, view, _html} = live(conn, ~p"/")
-
-    view |> element("form") |> render_submit(%{"match_id" => id})
-
-    assert score_cell(view, id) =~ "0 : 0"
-  end
-
-  test "a duplicate or blank match id shows an error", %{conn: conn, id: id} do
-    {:ok, view, _html} = live(conn, ~p"/")
-
+  test "a created match shows up on the board", %{conn: conn, id: id} do
     :ok = Matches.create_match(id)
-    assert view |> element("form") |> render_submit(%{"match_id" => id}) =~ "already exists"
-    assert view |> element("form") |> render_submit(%{"match_id" => "  "}) =~ "blank"
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    assert_eventually(fn -> assert score_cell(view, id) =~ "0 : 0" end)
   end
 
   test "goal buttons update the score", %{conn: conn, id: id} do
@@ -74,17 +64,6 @@ defmodule ScoreBoardWeb.ScoreLiveTest do
     view |> element(toggle) |> render_click()
     refute Blip.enabled?()
     assert view |> element("#net-status") |> render() =~ "connected"
-  end
-
-  test "timed blip presets recover automatically", %{conn: conn} do
-    {:ok, view, _html} = live(conn, ~p"/")
-
-    view |> element("button", "1ms blip") |> render_click()
-
-    assert_eventually(fn ->
-      refute Blip.enabled?()
-      assert view |> element("#net-status") |> render() =~ "connected"
-    end)
   end
 
   test "goals scored elsewhere show up live", %{conn: conn, id: id} do

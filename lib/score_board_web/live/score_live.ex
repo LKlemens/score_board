@@ -34,7 +34,6 @@ defmodule ScoreBoardWeb.ScoreLive do
       assign(socket,
         page_title: "Scoreboard",
         node: node(),
-        new_match_id: "",
         error: nil,
         blip: Blip.enabled?()
       )
@@ -43,27 +42,11 @@ defmodule ScoreBoardWeb.ScoreLive do
   end
 
   @impl Phoenix.LiveView
-  def handle_event("create", %{"match_id" => id}, socket) do
-    case id |> String.trim() |> create_match() do
-      :ok ->
-        {:noreply, socket |> assign(new_match_id: "", error: nil) |> refresh()}
-
-      {:error, message} ->
-        {:noreply, assign(socket, new_match_id: id, error: message)}
-    end
-  end
-
   def handle_event("goal", %{"id" => id, "team" => team}, socket) do
     case Matches.score_goal(id, team_atom(team)) do
       :ok -> {:noreply, assign(socket, error: nil)}
       {:error, :match_not_found} -> {:noreply, assign(socket, error: "match #{id} is gone")}
     end
-  end
-
-  def handle_event("blip", %{"duration" => duration}, socket) do
-    Blip.on()
-    Process.send_after(self(), :blip_off, String.to_integer(duration))
-    {:noreply, assign(socket, blip: true)}
   end
 
   def handle_event("toggle-node", %{"node" => node_str}, socket) do
@@ -86,20 +69,6 @@ defmodule ScoreBoardWeb.ScoreLive do
   def handle_info({:match_removed, _id}, socket), do: {:noreply, refresh(socket)}
   def handle_info({:score_updated, _id, _score}, socket), do: {:noreply, refresh(socket)}
   def handle_info(:board_reloaded, socket), do: {:noreply, refresh(socket)}
-
-  def handle_info(:blip_off, socket) do
-    Blip.off()
-    {:noreply, socket |> assign(blip: false) |> refresh()}
-  end
-
-  defp create_match(""), do: {:error, "match id can't be blank"}
-
-  defp create_match(id) do
-    case Matches.create_match(id) do
-      :ok -> :ok
-      {:error, :already_exists} -> {:error, "match #{id} already exists"}
-    end
-  end
 
   defp team_atom("home"), do: :home
   defp team_atom("away"), do: :away
@@ -200,17 +169,6 @@ defmodule ScoreBoardWeb.ScoreLive do
 
         <ClusterViz.cluster_viz nodes={@nodes} cluster={@cluster} node={@node} />
 
-        <form phx-submit="create" class="flex justify-center gap-2">
-          <input
-            type="text"
-            name="match_id"
-            value={@new_match_id}
-            placeholder="e.g. POL-GER"
-            autocomplete="off"
-            class="input input-bordered"
-          />
-          <button class="btn btn-primary">Create match</button>
-        </form>
         <p :if={@error} class="text-error text-center text-sm">{@error}</p>
 
         <div :if={@matches != []} class="overflow-x-auto">
@@ -271,19 +229,8 @@ defmodule ScoreBoardWeb.ScoreLive do
           </table>
         </div>
         <p :if={@matches == []} class="text-center opacity-70">
-          No matches yet - create one above.
+          No matches yet.
         </p>
-
-        <div class="divider">Network</div>
-
-        <div class="flex justify-center gap-4">
-          <button class="btn btn-outline" phx-click="blip" phx-value-duration="1">
-            1ms blip
-          </button>
-          <button class="btn btn-outline" phx-click="blip" phx-value-duration="5000">
-            5s outage
-          </button>
-        </div>
       </div>
     </Layouts.app>
     """
