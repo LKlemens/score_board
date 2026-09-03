@@ -15,11 +15,19 @@ defmodule ScoreBoard.Match do
   """
   use GenServer, restart: :transient
 
+  alias ScoreBoard.Board
   alias ScoreBoard.DB
   alias ScoreBoard.EchoPubSub
   alias ScoreBoard.Matches
 
+  require Logger
+
   @topic "matches:events"
+
+  # A restart can outrun the write that seeded this match's row into the
+  # local replica; poll briefly before giving up on it.
+  @restore_retries 20
+  @restore_delay 50
 
   @type team :: :home | :away
   @type score :: %{home: non_neg_integer(), away: non_neg_integer()}
@@ -45,10 +53,16 @@ defmodule ScoreBoard.Match do
     # instead of crash-looping the supervisor through restart intensity.
     Process.flag(:trap_exit, true)
 
-    score = restore_score(id)
+    # Keep init non-blocking:
+    {:ok, %{id: id, score: nil}, {:continue, :restore}}
+  end
+
+  @impl GenServer
+  def handle_continue(:restore, state) do
+    score = restore_score(state.id)
     # Carry the pid so boards monitor the exact process without racing the registry.
-    :ok = EchoPubSub.broadcast(@topic, {:match_created, id, score, self()})
-    {:ok, %{id: id, score: score}}
+    :ok = EchoPubSub.broadcast(@topic, {:match_created, state.id, score, self()})
+    {:noreply, %{state | score: score}}
   end
 
   @impl GenServer
@@ -76,13 +90,30 @@ defmodule ScoreBoard.Match do
     {:stop, reason, state}
   end
 
-  defp restore_score(id) do
-    # A match can start on a just-joined node (Horde redistribution/failover)
-    # whose registry has not synced the DB yet; wait for it to be resolvable
-    # so a transient miss does not look like an absent row. A reachable DB with
-    # no row is a genuine error and still crashes - matches are seeded first.
-    :ok = DB.await_ready()
-    {:ok, score} = DB.read(id) |> dbg()
-    score
+  # Reads this match's score from the local replica, retrying to ride out
+  # replication lag after a restart. Falls back to the board's derived score,
+  # then to 0:0, rather than crash-looping when no row ever lands.
+  defp restore_score(id, retries \\ @restore_retries)
+
+  defp restore_score(id, 0) do
+    case Board.fetch_score(id) do
+      {:ok, score} ->
+        score
+
+      :error ->
+        Logger.warning("No DB or board score for match #{inspect(id)}; starting from 0:0")
+        %{home: 0, away: 0}
+    end
+  end
+
+  defp restore_score(id, retries) do
+    case DB.read(id) do
+      {:ok, score} ->
+        score
+
+      :error ->
+        Process.sleep(@restore_delay)
+        restore_score(id, retries - 1)
+    end
   end
 end

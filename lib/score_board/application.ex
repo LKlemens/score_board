@@ -39,19 +39,15 @@ defmodule ScoreBoard.Application do
        members: :auto,
        distribution_strategy: ScoreBoard.RoundRobinDistribution,
        process_redistribution: :active},
-      {Horde.DynamicSupervisor,
-       name: ScoreBoard.DBSupervisor,
-       strategy: :one_for_one,
-       members: :auto,
-       process_redistribution: :passive},
-      # Blocks 500ms so Horde's registry syncs the existing :db before boot.
+      # This node's DB replica: replicated per node, so a node death loses
+      # nothing. Starts before the matches and board that read from it.
+      ScoreBoard.DB,
+      # Blocks 500ms so Horde's registries sync the existing cluster before boot.
       {ScoreBoard.BootBarrier, 500},
-      # Bring the one cluster-wide DB up, then claim one match for this node
+      # Claim one match for this node once the cluster has settled.
       Supervisor.child_spec(
         {Task,
          fn ->
-           ScoreBoard.DB.ensure_started()
-
            if Application.get_env(:score_board, :auto_claim_match, true) do
              ScoreBoard.Matches.claim_one()
            end

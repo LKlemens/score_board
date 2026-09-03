@@ -1,19 +1,20 @@
 defmodule ScoreBoard.DB do
   @moduledoc """
-  A stand-in for a database: one process in the whole cluster holding the
-  latest score per match - read and write, nothing else. Matches write
-  through on every goal and read on (re)start, so a restarted or moved
-  match keeps its score without any peer coordination.
+  A replicated, in-memory store of the latest score per match - one replica
+  per node, so no single failure loses data.
 
-  Runs under its own Horde supervisor (`ScoreBoard.DBSupervisor`), isolated
-  from the matches: when its host node dies, Horde restarts it on a
-  survivor - empty, since it is in-memory
-  only. Matches then fall back to the boards' derived state on restore and
-  refill the DB with their next goals. If two copies ever race up before
-  the registries sync, the losing copy max-merges its data into the winner
-  and stops.
+  Every node runs its own `ScoreBoard.DB` under the application tree. Reads
+  are local and always available; a write applies locally and fans out to
+  the peer replicas over raw distribution (`GenServer.abcast`), which stays
+  reliable regardless of the PubSub-layer blip the demo injects. Goals only
+  ever increment, so replicas reconcile by componentwise max - a
+  conflict-free join that converges no matter the message order.
+
+  Replicas gossip their full state on startup and whenever a node joins:
+  the newcomer asks peers to push their scores and max-merges the replies,
+  then tells the boards to reload so they backfill any rows they missed.
   """
-  use GenServer, restart: :transient
+  use GenServer
 
   alias ScoreBoard.EchoPubSub
   alias ScoreBoard.Match
@@ -21,68 +22,56 @@ defmodule ScoreBoard.DB do
 
   require Logger
 
-  @name {:via, Horde.Registry, {ScoreBoard.MatchRegistry, :db}}
-  @supervisor ScoreBoard.DBSupervisor
+  @name __MODULE__
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(_opts) do
     GenServer.start_link(__MODULE__, :ok, name: @name)
   end
 
-  @doc """
-  Starts the DB somewhere in the cluster if it is not running yet.
-
-  Called by every node at boot; the registry makes it idempotent.
-  """
-  @spec ensure_started() :: :ok
-  def ensure_started do
-    if alive?() do
-      :ok
-    else
-      case Horde.DynamicSupervisor.start_child(@supervisor, __MODULE__) do
-        {:ok, _pid} -> :ok
-        {:error, {:already_started, _pid}} -> :ok
-        :ignore -> :ok
-      end
-    end
-  end
-
-  @doc "Whether a DB process is currently visible in the registry."
+  @doc "Whether this node's replica is running."
   @spec alive?() :: boolean()
-  def alive?, do: is_pid(GenServer.whereis(@name))
+  def alive?, do: is_pid(Process.whereis(@name))
 
-  @doc "The stored score for a match."
+  @doc "The stored score for a match, read from the local replica."
   @spec read(Matches.match_id()) :: {:ok, Match.score()} | :error
-  def read(id), do: safe_call({:read, id}, :error)
+  def read(id), do: GenServer.call(@name, {:read, id})
 
-  @doc "Stores the latest score for a match."
-  @spec write(Matches.match_id(), Match.score()) :: :ok | :error
-  def write(id, score), do: safe_call({:write, id, score}, :error)
+  @doc "Stores the latest score for a match and replicates it to the peers."
+  @spec write(Matches.match_id(), Match.score()) :: :ok
+  def write(id, score), do: GenServer.call(@name, {:write, id, score})
 
-  @doc "All stored scores, keyed by match id."
+  @doc "All stored scores, keyed by match id, from the local replica."
   @spec all() :: %{Matches.match_id() => Match.score()}
-  def all, do: safe_call(:all, %{})
+  def all, do: GenServer.call(@name, :all)
 
   @impl GenServer
   def init(:ok) do
-    Logger.warning("DB starting on #{node()}")
-    # Trap exits so a Horde registry name conflict arrives as a message.
-    Process.flag(:trap_exit, true)
-    {:ok, %{}}
+    Logger.warning("DB replica starting on #{node()}")
+    # Future topology changes drive re-sync; existing peers are pulled once
+    # in handle_continue below.
+    :net_kernel.monitor_nodes(true)
+    {:ok, %{}, {:continue, :request_sync}}
   end
 
-  # Reads and writes both go through the GenServer so callers on any node
-  # reach the single owner via its registered name. A real DB would let
-  # reads bypass the process (e.g. an ETS table with read_concurrency), but
-  # this in-memory stand-in stays a plain serialized map - there is no
-  # point optimizing it for the sake of keeping the example simple.
+  # Ask every already-connected peer to push its scores. A cast, not a call,
+  # so two replicas booting at once cannot deadlock waiting on each other.
+  @impl GenServer
+  def handle_continue(:request_sync, scores) do
+    request_sync(Node.list())
+    {:noreply, scores}
+  end
+
   @impl GenServer
   def handle_call({:read, id}, _from, scores) do
     {:reply, Map.fetch(scores, id), scores}
   end
 
   def handle_call({:write, id, score}, _from, scores) do
-    {:reply, :ok, Map.put(scores, id, score)}
+    # Peers get the raw value and merge it themselves; abcast excludes us,
+    # so we merge our own copy here.
+    GenServer.abcast(Node.list(), @name, {:replicate, id, score})
+    {:reply, :ok, merge_one(scores, id, score)}
   end
 
   def handle_call(:all, _from, scores) do
@@ -90,67 +79,45 @@ defmodule ScoreBoard.DB do
   end
 
   @impl GenServer
-  def handle_cast({:merge, other}, scores) do
-    merged = Map.merge(scores, other, fn _id, a, b -> max_score(a, b) end)
+  def handle_cast({:replicate, id, score}, scores) do
+    {:noreply, merge_one(scores, id, score)}
+  end
 
-    # Tell boards to reload so they backfill rows only the losing copy had.
-    EchoPubSub.broadcast(Match.topic(), :db_merged)
+  # A peer (re)joined and asked us to send what we have.
+  def handle_cast({:sync_request, from}, scores) do
+    GenServer.cast({@name, from}, {:merge_all, scores})
+    {:noreply, scores}
+  end
 
+  # A peer's full state arrived; max-merge it and, if it added anything, tell
+  # the boards to reload so they backfill the newly learned rows.
+  def handle_cast({:merge_all, remote}, scores) do
+    merged = merge_all(scores, remote)
+    if merged != scores, do: EchoPubSub.broadcast(Match.topic(), :db_merged)
     {:noreply, merged}
   end
 
   @impl GenServer
-  def handle_info({:EXIT, _pid, {:name_conflict, _key_value, _registry, winner}}, scores) do
-    # A duplicate DB registered elsewhere and this copy lost: hand over
-    # everything (max-merged there) and stop cleanly.
-    Logger.warning("DB lost name conflict to #{inspect(winner)}; merging scores and stopping")
-    GenServer.cast(winner, {:merge, scores})
-    {:stop, :normal, scores}
+  def handle_info({:nodeup, peer}, scores) do
+    GenServer.cast({@name, peer}, {:sync_request, node()})
+    {:noreply, scores}
   end
 
-  def handle_info({:EXIT, _pid, reason}, scores) do
-    {:stop, reason, scores}
+  def handle_info({:nodedown, _peer}, scores), do: {:noreply, scores}
+
+  defp request_sync(peers) do
+    for peer <- peers, do: GenServer.cast({@name, peer}, {:sync_request, node()})
+  end
+
+  defp merge_one(scores, id, score) do
+    Map.update(scores, id, score, &max_score(&1, score))
+  end
+
+  defp merge_all(scores, remote) do
+    Map.merge(scores, remote, fn _id, a, b -> max_score(a, b) end)
   end
 
   # Goal counters only ever increment, so componentwise max cannot lose
-  # goals, whichever copy was further ahead.
+  # goals, whichever replica was further ahead.
   defp max_score(a, b), do: %{home: max(a.home, b.home), away: max(a.away, b.away)}
-
-  @doc """
-  Blocks until the cluster-wide DB is resolvable from this node, or the retry
-  budget runs out (returns `:ok` either way).
-
-  Horde's registry is eventually consistent, so on a just-joined node the `:db`
-  name can be briefly invisible - a read then would fail spuriously. Callers
-  that must read the DB (a (re)starting match, boot seeding) wait on this first.
-
-  Leads with a `:db_settle_ms` sleep (default 300): `alive?/0` turns true the
-  instant *any* `:db` is visible, including an empty split-brain duplicate, so
-  the settle gives Horde's `name_conflict` merge room to converge on the real
-  copy before the caller reads.
-  """
-  @spec await_ready(non_neg_integer()) :: :ok
-  def await_ready(retries \\ 20) do
-    Process.sleep(Application.get_env(:score_board, :db_settle_ms, 300))
-    wait_ready(retries)
-  end
-
-  defp wait_ready(0), do: :ok
-
-  defp wait_ready(retries) do
-    if alive?() do
-      :ok
-    else
-      Process.sleep(150)
-      wait_ready(retries - 1)
-    end
-  end
-
-  # The DB may briefly be down mid-failover; scoring must keep working, so
-  # callers get a fallback instead of an exit.
-  defp safe_call(request, fallback) do
-    GenServer.call(@name, request)
-  catch
-    :exit, _reason -> fallback |> dbg()
-  end
 end

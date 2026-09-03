@@ -1,6 +1,9 @@
 defmodule ScoreBoard.DBTest do
-  # One DB in the cluster - tests share it, so ids are test-scoped.
+  # One replica per node; this suite is single-node, so it exercises the
+  # local merge handlers directly. Ids are test-scoped for concurrency.
   use ExUnit.Case, async: true
+
+  import ScoreBoard.TestHelpers
 
   alias ScoreBoard.DB
 
@@ -17,5 +20,19 @@ defmodule ScoreBoard.DBTest do
 
     assert :ok = DB.write(id, %{home: 3, away: 2})
     assert {:ok, %{home: 3, away: 2}} = DB.read(id)
+  end
+
+  test "a replicated write from a peer merges componentwise-max", %{id: id} do
+    GenServer.cast(DB, {:replicate, id, %{home: 2, away: 0}})
+    GenServer.cast(DB, {:replicate, id, %{home: 1, away: 5}})
+
+    assert_eventually(fn -> assert DB.read(id) == {:ok, %{home: 2, away: 5}} end)
+  end
+
+  test "merge_all folds a peer's whole state in by max", %{id: id} do
+    :ok = DB.write(id, %{home: 4, away: 1})
+    GenServer.cast(DB, {:merge_all, %{id => %{home: 2, away: 3}}})
+
+    assert_eventually(fn -> assert DB.read(id) == {:ok, %{home: 4, away: 3}} end)
   end
 end
