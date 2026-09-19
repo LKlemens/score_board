@@ -128,11 +128,13 @@ defmodule ScoreBoardWeb.ClusterViz do
           </text>
           <g class="cursor-help">
             <title>
-              Messages this node is missing.
-              Orange: queued at its peers and replayed in order once the
-              connection is back.
-              Red: past the ring-buffer capacity - the node will receive
-              cursor_expired and reload from the match processes instead.
+              {if circle.overflow?,
+                do: "missing_msg: #{circle.missing}, capacity: overflow",
+                else: "missing_msg: #{circle.missing}, max_capacity: #{circle.capacity || "?"}"} —
+              Orange: queued at its peers (up to the max capacity of {circle.capacity || "?"})
+              and replayed in order once the connection is back.
+              Red: past capacity - the node receives cursor_expired and reloads
+              from the match processes instead.
             </title>
             <circle cx={circle.info_x} cy={circle.y} r="9" class="fill-info opacity-80" />
             <text
@@ -173,7 +175,7 @@ defmodule ScoreBoardWeb.ClusterViz do
             width="90"
             height="22"
             rx="11"
-            class={if circle.offline?, do: "fill-success", else: "fill-warning"}
+            class={if circle.offline?, do: "fill-success", else: "fill-error"}
           />
           <text
             x={circle.x}
@@ -329,7 +331,7 @@ defmodule ScoreBoardWeb.ClusterViz do
           true -> "success"
         end
 
-      {missing, expired?} = missing(cluster, viz_node)
+      {missing, expired?, capacity} = missing(cluster, viz_node)
       label = short_name(viz_node) <> if viz_node == self_node, do: " (this)", else: ""
       reachable? = status != :unreachable
       offline? = reachable? and status.blip
@@ -346,6 +348,8 @@ defmodule ScoreBoardWeb.ClusterViz do
         reachable?: reachable?,
         offline?: offline?,
         missing: min(missing, 999),
+        capacity: capacity,
+        overflow?: expired?,
         missing_class: if(expired?, do: "fill-error", else: "fill-warning"),
         badge_x: if(x < @center_x, do: x - 64, else: x + 26),
         info_x: if(x < @center_x, do: x - 76, else: x + 76)
@@ -370,7 +374,13 @@ defmodule ScoreBoardWeb.ClusterViz do
     total = backlogs |> Enum.map(fn {count, _capacity} -> count end) |> Enum.sum()
     expired? = Enum.any?(backlogs, fn {c, cap} -> cap != nil and c >= cap end)
 
-    {total, expired?}
+    capacity =
+      backlogs
+      |> Enum.map(fn {_c, cap} -> cap end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.max(fn -> nil end)
+
+    {total, expired?, capacity}
   end
 
   defp links(nodes, positions, cluster) do

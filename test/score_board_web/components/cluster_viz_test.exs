@@ -1,6 +1,8 @@
 defmodule ScoreBoardWeb.ClusterVizTest do
   use ExUnit.Case, async: true
 
+  import Phoenix.LiveViewTest
+
   alias ScoreBoardWeb.ClusterViz
 
   @up %{blip: false, pending: %{}, capacity: 20}
@@ -88,6 +90,32 @@ defmodule ScoreBoardWeb.ClusterVizTest do
 
       assert ClusterViz.flush_streams(now, now) == []
     end
+  end
+
+  describe "cluster_viz/1 rendering" do
+    test "offline and online toggles use distinct colours" do
+      html = render_viz(%{a: up(b: 6), b: blipped(a: 0)})
+
+      assert html =~ ~r/<rect[^>]*class="fill-error"><\/rect>\s*<text[^>]*>\s*Go offline/
+      assert html =~ ~r/<rect[^>]*class="fill-success"><\/rect>\s*<text[^>]*>\s*Back online/
+    end
+
+    test "the tooltip shows the missing count against the max capacity" do
+      html = render_viz(%{a: up(b: 6), b: blipped(a: 0)})
+
+      assert html =~ "missing_msg: 6, max_capacity: 20"
+    end
+
+    test "past the buffer the tooltip reads overflow" do
+      html = render_viz(%{a: up(b: 25), b: blipped(a: 0)})
+
+      assert html =~ "missing_msg: 25, capacity: overflow"
+    end
+  end
+
+  defp render_viz(cluster) do
+    nodes = cluster |> Map.keys() |> Enum.sort()
+    render_component(&ClusterViz.cluster_viz/1, nodes: nodes, cluster: cluster, node: hd(nodes))
   end
 
   defp up(pending), do: %{@up | pending: Map.new(pending)}
