@@ -115,9 +115,55 @@
 .link-live {
   stroke-dasharray: 8 8;
   animation: link-flow 0.7s linear infinite;
-  opacity: 0.5;
+  opacity: 0.35;
 }
 
 .link-broken {
   stroke-dasharray: 4 10;
+}
+
+/* Goal flight: the comet the ClusterFx hook walks along a link, and the
+   ring the receiving node throws when it lands. Team colours indirect
+   through the theme variables so both themes stay legible. */
+:root {
+  --fx-home: var(--color-primary);
+  --fx-away: var(--color-warning);
+  --fx-flush: var(--color-info);
+}
+
+.fx-home {
+  --fx-color: var(--fx-home);
+}
+
+.fx-away {
+  --fx-color: var(--fx-away);
+}
+
+.fx-flush {
+  --fx-color: var(--fx-flush);
+}
+
+.fx-comet circle {
+  fill: var(--fx-color);
+  filter: drop-shadow(0 0 5px var(--fx-color));
+}
+
+@keyframes fx-ripple {
+  from {
+    transform: scale(0.55);
+    opacity: 0.8;
+  }
+  to {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+}
+
+.fx-ripple {
+  fill: none;
+  stroke: var(--fx-color);
+  stroke-width: 3;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: fx-ripple 0.65s ease-out forwards;
 }

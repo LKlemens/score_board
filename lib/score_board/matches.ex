@@ -94,7 +94,10 @@ defmodule ScoreBoard.Matches do
 
     case Enum.at(@match_pool, index) do
       nil ->
-        Logger.warning("No fixture for node ordinal #{index}; pool of #{length(@match_pool)} exhausted")
+        Logger.warning(
+          "No fixture for node ordinal #{index}; pool of #{length(@match_pool)} exhausted"
+        )
+
         {:error, :pool_exhausted}
 
       id ->

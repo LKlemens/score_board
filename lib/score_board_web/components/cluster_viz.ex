@@ -4,16 +4,27 @@ defmodule ScoreBoardWeb.ClusterViz do
 
   Nodes are laid out as a regular polygon (triangle for 3, square for 4,
   and so on; one or two nodes sit on a horizontal line). Healthy links
-  carry traveling message dots; a link to a blipped or unreachable node
-  turns red. The box beside a lagging node counts the messages it is
+  carry faint traveling message dots; a link to a blipped or unreachable
+  node turns red. The box beside a lagging node counts the messages it is
   missing - queued at its peers, flushed once the connection is back; red
   once past the ring buffer, when the node will reload instead of replay.
+
+  A scored goal is drawn on top of this ambient traffic by the `ClusterFx`
+  JavaScript hook: it reads the link geometry out of this SVG and flies a
+  comet along it. The empty `cluster-fx` group is where those temporary
+  elements live; it is marked `phx-update="ignore"` so the half-second
+  poll cannot wipe a comet mid-flight. The same hook replays a node's
+  buffered backlog as a burst of dots when that node comes back online.
   """
   use Phoenix.Component
 
   @center_x 360
   @polygon_radius 115
   @polygon_center_y 155
+  @line_center_y 70
+
+  # How far a link bows away from the middle of the graph.
+  @bow 24
 
   attr :nodes, :list, required: true, doc: "sorted cluster nodes"
   attr :cluster, :map, required: true, doc: "node => Cluster.snapshot() | :unreachable"
@@ -29,17 +40,47 @@ defmodule ScoreBoardWeb.ClusterViz do
       |> assign(:circles, circles(assigns.nodes, positions, assigns.cluster, assigns.node))
 
     ~H"""
-    <svg id="cluster-viz" viewBox={"0 0 720 #{@height}"} class="w-full max-w-3xl mx-auto">
+    <svg
+      id="cluster-viz"
+      phx-hook="ClusterFx"
+      viewBox={"0 0 720 #{@height}"}
+      class="w-full max-w-3xl mx-auto"
+    >
+      <defs>
+        <radialGradient
+          :for={tone <- ~w(success error base-300)}
+          id={"node-#{tone}"}
+          cx="35%"
+          cy="28%"
+          r="80%"
+        >
+          <stop offset="0%" stop-color={"var(--color-#{tone})"} stop-opacity="1" />
+          <stop offset="100%" stop-color={"var(--color-#{tone})"} stop-opacity="0.45" />
+        </radialGradient>
+        <filter id="node-glow" x="-80%" y="-80%" width="260%" height="260%">
+          <feGaussianBlur stdDeviation="6" />
+        </filter>
+      </defs>
+
       <g :for={link <- @links}>
-        <path d={link.path} class={link.class} fill="none" stroke-width="2.5" />
+        <path
+          d={link.path}
+          class={link.class}
+          fill="none"
+          stroke-width="2.5"
+          stroke-linecap="round"
+          data-link-from={link.from}
+          data-link-to={link.to}
+          data-healthy={to_string(link.healthy?)}
+        />
         <g :if={link.healthy?}>
-          <circle r="5" class="fill-primary">
-            <animateMotion dur="1.6s" repeatCount="indefinite" path={link.path} />
+          <circle r="3.5" class="fill-primary opacity-45">
+            <animateMotion dur="2.4s" repeatCount="indefinite" path={link.path} />
           </circle>
-          <circle r="5" class="fill-primary opacity-60">
+          <circle r="3.5" class="fill-primary opacity-25">
             <animateMotion
-              dur="1.6s"
-              begin="-0.8s"
+              dur="2.4s"
+              begin="-1.2s"
               repeatCount="indefinite"
               calcMode="linear"
               keyPoints="1;0"
@@ -49,19 +90,36 @@ defmodule ScoreBoardWeb.ClusterViz do
           </circle>
         </g>
       </g>
+
       <g :for={circle <- @circles}>
-        <circle cx={circle.x} cy={circle.y} r="20" class={circle.class} />
+        <circle
+          cx={circle.x}
+          cy={circle.y}
+          r="26"
+          class={[circle.halo_class, "opacity-30", circle.pulse? && "animate-pulse"]}
+          filter="url(#node-glow)"
+        />
+        <circle
+          cx={circle.x}
+          cy={circle.y}
+          r="20"
+          fill={circle.fill}
+          class="stroke-base-100"
+          stroke-width="2"
+          stroke-opacity="0.7"
+          data-node-dot={circle.node}
+        />
         <g :if={circle.missing > 0}>
           <rect
-            x={circle.x + 26}
+            x={circle.badge_x}
             y={circle.y - 12}
             width="38"
             height="24"
-            rx="6"
+            rx="8"
             class={circle.missing_class}
           />
           <text
-            x={circle.x + 45}
+            x={circle.badge_x + 19}
             y={circle.y + 4}
             text-anchor="middle"
             class="fill-base-100 text-[12px] font-bold"
@@ -76,9 +134,9 @@ defmodule ScoreBoardWeb.ClusterViz do
               Red: past the ring-buffer capacity - the node will receive
               cursor_expired and reload from the match processes instead.
             </title>
-            <circle cx={circle.x + 76} cy={circle.y} r="9" class="fill-info opacity-80" />
+            <circle cx={circle.info_x} cy={circle.y} r="9" class="fill-info opacity-80" />
             <text
-              x={circle.x + 76}
+              x={circle.info_x}
               y={circle.y + 4}
               text-anchor="middle"
               class="fill-base-100 text-[11px] font-bold italic"
@@ -87,9 +145,17 @@ defmodule ScoreBoardWeb.ClusterViz do
             </text>
           </g>
         </g>
+        <rect
+          x={circle.x - circle.label_width / 2}
+          y={circle.y + 28}
+          width={circle.label_width}
+          height="19"
+          rx="9"
+          class="fill-base-300 opacity-70"
+        />
         <text
           x={circle.x}
-          y={circle.y + 40}
+          y={circle.y + 41}
           text-anchor="middle"
           class="fill-current text-[12px] font-mono"
         >
@@ -97,21 +163,21 @@ defmodule ScoreBoardWeb.ClusterViz do
         </text>
         <g
           :if={circle.reachable?}
-          class="cursor-pointer"
+          class="cursor-pointer transition-opacity hover:opacity-80"
           phx-click="toggle-node"
           phx-value-node={circle.node}
         >
           <rect
             x={circle.x - 45}
-            y={circle.y + 50}
+            y={circle.y + 53}
             width="90"
             height="22"
-            rx="6"
+            rx="11"
             class={if circle.offline?, do: "fill-success", else: "fill-warning"}
           />
           <text
             x={circle.x}
-            y={circle.y + 65}
+            y={circle.y + 68}
             text-anchor="middle"
             class="fill-base-100 text-[11px] font-bold"
           >
@@ -119,17 +185,114 @@ defmodule ScoreBoardWeb.ClusterViz do
           </text>
         </g>
       </g>
+
+      <g id="cluster-fx" phx-update="ignore"></g>
     </svg>
     <p class="text-center text-xs opacity-60 -mt-2">
-      dots = events flowing &nbsp;•&nbsp; box next to a node = messages it is
-      missing &nbsp;•&nbsp; red box = past the buffer, node will reload
-      instead of replay
+      faint dots = ambient traffic &nbsp;•&nbsp; bright comet = the goal you
+      just scored leaving the node its match lives on &nbsp;•&nbsp; blue
+      burst = a node back online replaying what was buffered &nbsp;•&nbsp;
+      box next to a node = messages it is missing &nbsp;•&nbsp; red box =
+      past the buffer, node will reload instead of replay
     </p>
     """
   end
 
-  defp svg_height(count) when count <= 2, do: 160
-  defp svg_height(_count), do: 360
+  @doc """
+  Whether the link between two nodes carries events right now.
+
+  A link is up when neither end is blipped or unreachable - blip is a
+  node-wide flag, so it takes down every link that touches the node.
+
+  ## Examples
+
+      iex> ClusterViz.link_up?(%{a: %{blip: false}, b: %{blip: false}}, :a, :b)
+      true
+
+      iex> ClusterViz.link_up?(%{a: %{blip: true}, b: %{blip: false}}, :a, :b)
+      false
+  """
+  @spec link_up?(%{node() => map() | :unreachable}, node(), node()) :: boolean()
+  def link_up?(cluster, a, b) do
+    not down?(Map.get(cluster, a, :unreachable)) and not down?(Map.get(cluster, b, :unreachable))
+  end
+
+  @doc """
+  The single hop a goal takes across the cluster, for the browser to animate.
+
+  A goal is only ever broadcast by the node the match lives on, so that
+  node is where the animation starts - no matter which node the browser
+  is talking to. Peers behind a link that is down are dropped, so a goal
+  is drawn stopping short of a node that has gone offline.
+
+  Nodes are returned as strings, ready to be pushed to the client.
+
+  ## Examples
+
+      iex> cluster = %{a: %{blip: false}, b: %{blip: false}}
+      iex> ClusterViz.goal_hops(cluster, [:a, :b], :b)
+      [%{from: "b", to: ["a"]}]
+  """
+  @spec goal_hops(%{node() => map() | :unreachable}, [node()], node()) :: [
+          %{from: String.t(), to: [String.t()]}
+        ]
+  def goal_hops(cluster, nodes, owner) do
+    peers =
+      for peer <- nodes, peer != owner, link_up?(cluster, owner, peer), do: Atom.to_string(peer)
+
+    if peers == [], do: [], else: [%{from: Atom.to_string(owner), to: peers}]
+  end
+
+  @doc """
+  The buffered traffic a node that just came back is about to exchange.
+
+  Comparing two consecutive snapshots tells us which nodes went from down
+  to up. For each of those, the older snapshot still holds the backlog
+  that built up while it was away - what its peers queued towards it, and
+  what it queued towards them - and that is what flushes the moment the
+  connection is restored.
+
+  ## Examples
+
+      iex> was = %{a: %{blip: false, pending: %{b: 3}}, b: %{blip: true, pending: %{a: 0}}}
+      iex> now = %{a: %{blip: false, pending: %{b: 0}}, b: %{blip: false, pending: %{a: 0}}}
+      iex> ClusterViz.flush_streams(was, now)
+      [%{from: "a", to: "b", count: 3}]
+  """
+  @spec flush_streams(%{node() => map() | :unreachable}, %{node() => map() | :unreachable}) :: [
+          %{from: String.t(), to: String.t(), count: pos_integer()}
+        ]
+  def flush_streams(was, now) do
+    for {recovered, status} <- now,
+        down?(Map.get(was, recovered, :unreachable)),
+        not down?(status),
+        {peer, peer_status} <- was,
+        peer != recovered,
+        not down?(Map.get(now, peer, :unreachable)),
+        stream <- backlog(was, peer_status, peer, recovered),
+        uniq: true,
+        do: stream
+  end
+
+  # Both directions of the backlog between a recovered node and one peer.
+  defp backlog(was, peer_status, peer, recovered) do
+    outbound = queued(peer_status, recovered)
+    inbound = queued(Map.get(was, recovered, :unreachable), peer)
+
+    [
+      outbound > 0 &&
+        %{from: Atom.to_string(peer), to: Atom.to_string(recovered), count: outbound},
+      inbound > 0 &&
+        %{from: Atom.to_string(recovered), to: Atom.to_string(peer), count: inbound}
+    ]
+    |> Enum.filter(& &1)
+  end
+
+  defp queued(%{pending: pending}, target), do: Map.get(pending, target, 0)
+  defp queued(_status, _target), do: 0
+
+  defp svg_height(count) when count <= 2, do: 175
+  defp svg_height(_count), do: 370
 
   # One or two nodes sit on a line; three or more form a regular polygon
   # (triangle, square, pentagon, ...) with the first node on top.
@@ -137,10 +300,10 @@ defmodule ScoreBoardWeb.ClusterViz do
     coords =
       case length(nodes) do
         1 ->
-          [{@center_x, 70}]
+          [{@center_x, @line_center_y}]
 
         2 ->
-          [{160, 70}, {560, 70}]
+          [{160, @line_center_y}, {560, @line_center_y}]
 
         count ->
           for index <- 0..(count - 1) do
@@ -159,15 +322,14 @@ defmodule ScoreBoardWeb.ClusterViz do
       {x, y} = positions[viz_node]
       status = cluster[viz_node]
 
-      class =
+      tone =
         cond do
-          status == :unreachable -> "fill-base-300"
-          status.blip -> "fill-error animate-pulse"
-          true -> "fill-success"
+          status == :unreachable -> "base-300"
+          status.blip -> "error"
+          true -> "success"
         end
 
-      {missing, capacity} = missing(cluster, viz_node)
-      full? = capacity != nil and missing >= capacity
+      {missing, expired?} = missing(cluster, viz_node)
       label = short_name(viz_node) <> if viz_node == self_node, do: " (this)", else: ""
       reachable? = status != :unreachable
       offline? = reachable? and status.blip
@@ -175,46 +337,84 @@ defmodule ScoreBoardWeb.ClusterViz do
       %{
         x: x,
         y: y,
-        class: class,
+        fill: "url(#node-#{tone})",
+        halo_class: "fill-#{tone}",
+        pulse?: offline?,
         label: label,
+        label_width: round(String.length(label) * 7.3) + 14,
         node: Atom.to_string(viz_node),
         reachable?: reachable?,
         offline?: offline?,
         missing: min(missing, 999),
-        missing_class: if(full?, do: "fill-error", else: "fill-warning")
+        missing_class: if(expired?, do: "fill-error", else: "fill-warning"),
+        badge_x: if(x < @center_x, do: x - 64, else: x + 26),
+        info_x: if(x < @center_x, do: x - 76, else: x + 76)
       }
     end
   end
 
-  # How many messages this node is missing: every peer queues (roughly)
-  # the same backlog towards it, so the maximum across senders is the one
-  # number worth showing - no sum. Also returns that sender's ring-buffer
-  # capacity: past it, the node's cursor expires and it reloads instead of
-  # replaying.
+  # How many messages this node is missing. Each peer only buffers what it
+  # produced itself, so the backlogs are disjoint and the node is behind by
+  # their sum. Expiry is still per sender: one peer overrunning its ring
+  # buffer is enough for the node to reload instead of replaying.
   defp missing(cluster, receiver) do
-    cluster
-    |> Map.delete(receiver)
-    |> Map.values()
-    |> Enum.map(fn
-      %{pending: pending, capacity: capacity} -> {Map.get(pending, receiver, 0), capacity}
-      _unreachable -> {0, nil}
-    end)
-    |> Enum.max_by(fn {count, _capacity} -> count end, fn -> {0, nil} end)
+    backlogs =
+      cluster
+      |> Map.delete(receiver)
+      |> Map.values()
+      |> Enum.map(fn
+        %{pending: pending, capacity: capacity} -> {Map.get(pending, receiver, 0), capacity}
+        _unreachable -> {0, nil}
+      end)
+
+    total = backlogs |> Enum.map(fn {count, _capacity} -> count end) |> Enum.sum()
+    expired? = Enum.any?(backlogs, fn {c, cap} -> cap != nil and c >= cap end)
+
+    {total, expired?}
   end
 
   defp links(nodes, positions, cluster) do
     indexed = Enum.with_index(nodes)
+    center = graph_center(length(nodes))
 
     for {a, i} <- indexed, {b, j} <- indexed, i < j do
-      {x1, y1} = positions[a]
-      {x2, y2} = positions[b]
-      broken? = down?(cluster[a]) or down?(cluster[b])
+      healthy? = link_up?(cluster, a, b)
 
       %{
-        path: "M #{x1} #{y1} L #{x2} #{y2}",
-        class: if(broken?, do: "stroke-error link-broken", else: "stroke-success link-live"),
-        healthy?: not broken?
+        path: curve(positions[a], positions[b], center),
+        from: Atom.to_string(a),
+        to: Atom.to_string(b),
+        class: if(healthy?, do: "stroke-success link-live", else: "stroke-error link-broken"),
+        healthy?: healthy?
       }
+    end
+  end
+
+  defp graph_center(count) when count <= 2, do: {@center_x, @line_center_y}
+  defp graph_center(_count), do: {@center_x, @polygon_center_y}
+
+  # Bow the link away from the middle of the graph so chords do not pile up
+  # on top of each other. A link whose midpoint sits on the centre has no
+  # outward direction, so it bows sideways instead.
+  defp curve({x1, y1}, {x2, y2}, {cx, cy}) do
+    mid_x = (x1 + x2) / 2
+    mid_y = (y1 + y2) / 2
+    {unit_x, unit_y} = outward(mid_x - cx, mid_y - cy, x2 - x1, y2 - y1)
+
+    control_x = round(mid_x + unit_x * @bow)
+    control_y = round(mid_y + unit_y * @bow)
+
+    "M #{x1} #{y1} Q #{control_x} #{control_y} #{x2} #{y2}"
+  end
+
+  defp outward(dx, dy, link_x, link_y) do
+    case :math.sqrt(dx * dx + dy * dy) do
+      distance when distance < 1.0 ->
+        length = :math.sqrt(link_x * link_x + link_y * link_y)
+        {-link_y / length, link_x / length}
+
+      distance ->
+        {dx / distance, dy / distance}
     end
   end
 

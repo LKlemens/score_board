@@ -44,7 +44,7 @@ defmodule ScoreBoardWeb.ScoreLive do
   @impl Phoenix.LiveView
   def handle_event("goal", %{"id" => id, "team" => team}, socket) do
     case Matches.score_goal(id, team_atom(team)) do
-      :ok -> {:noreply, assign(socket, error: nil)}
+      :ok -> {:noreply, socket |> assign(error: nil) |> push_goal_flight(id, team)}
       {:error, :match_not_found} -> {:noreply, assign(socket, error: "match #{id} is gone")}
     end
   end
@@ -73,6 +73,39 @@ defmodule ScoreBoardWeb.ScoreLive do
   defp team_atom("home"), do: :home
   defp team_atom("away"), do: :away
 
+  # Tell the browser to fly the goal along the path it really takes: this
+  # node hands it to the match owner, the owner broadcasts it out. Hops
+  # over a link that is down are left out, so a goal visibly stops at a
+  # node that has gone offline.
+  defp push_goal_flight(socket, id, team) do
+    case owner(id) do
+      nil -> socket
+      owner -> push_event(socket, "goal-flight", %{team: team, hops: hops(socket, owner)})
+    end
+  end
+
+  defp hops(socket, owner) do
+    %{nodes: nodes, cluster: cluster} = socket.assigns
+    ClusterViz.goal_hops(cluster, nodes, owner)
+  end
+
+  # A node that was offline flushes everything it buffered - and everything
+  # buffered towards it - the moment it is back. The previous snapshot is
+  # the only place those counts still exist, so the comparison has to
+  # happen here, before the new one replaces it.
+  defp push_flush(socket, cluster) do
+    case Map.get(socket.assigns, :cluster) do
+      nil ->
+        socket
+
+      was ->
+        case ClusterViz.flush_streams(was, cluster) do
+          [] -> socket
+          streams -> push_event(socket, "cluster-flush", %{streams: streams})
+        end
+    end
+  end
+
   defp refresh(socket) do
     nodes = Enum.sort([node() | Node.list()])
     cluster = Map.new(nodes, &{&1, snapshot_on(&1)})
@@ -94,7 +127,9 @@ defmodule ScoreBoardWeb.ScoreLive do
       |> Enum.sort()
       |> Enum.map(fn id -> %{id: id, owner: owner(id), true_score: true_score(id)} end)
 
-    assign(socket, nodes: nodes, cluster: cluster, boards: boards, matches: matches)
+    socket
+    |> push_flush(cluster)
+    |> assign(nodes: nodes, cluster: cluster, boards: boards, matches: matches)
   end
 
   defp toggle_blip(target) when target == node() do
@@ -142,9 +177,6 @@ defmodule ScoreBoardWeb.ScoreLive do
     end
   end
 
-  defp fmt(nil), do: "-"
-  defp fmt(%{home: home, away: away}), do: "#{home} : #{away}"
-
   # A cell is stale when the truth is known and this board disagrees -
   # including a missing row (the board never saw the match).
   defp stale?(_cell, nil), do: false
@@ -152,6 +184,27 @@ defmodule ScoreBoardWeb.ScoreLive do
 
   defp short_name(node_atom) do
     node_atom |> Atom.to_string() |> String.split("@") |> hd()
+  end
+
+  attr :score, :map, default: nil, doc: "a %{home: _, away: _} score, or nil"
+  attr :stale?, :boolean, default: false, doc: "this board disagrees with the truth"
+  attr :truth?, :boolean, default: false, doc: "render as the authoritative score"
+
+  defp score(assigns) do
+    ~H"""
+    <span :if={@score == nil} class="opacity-40">-</span>
+    <span
+      :if={@score}
+      class={[
+        "font-mono tabular-nums font-semibold",
+        @truth? && "text-lg font-bold",
+        @stale? && "badge badge-error badge-lg gap-0 font-bold animate-pulse",
+        !@stale? && !@truth? && "text-base"
+      ]}
+    >
+      {@score.home}<span class="opacity-50">{" : "}</span>{@score.away}
+    </span>
+    """
   end
 
   @impl Phoenix.LiveView
@@ -171,58 +224,74 @@ defmodule ScoreBoardWeb.ScoreLive do
 
         <p :if={@error} class="text-error text-center text-sm">{@error}</p>
 
-        <div :if={@matches != []} class="overflow-x-auto">
-          <table class="table whitespace-nowrap">
+        <div
+          :if={@matches != []}
+          class="overflow-x-auto rounded-box border border-base-300 bg-base-100 shadow-sm"
+        >
+          <table class="table table-zebra whitespace-nowrap">
             <thead>
-              <tr>
-                <th>Match</th>
-                <th>Owner</th>
-                <th class="text-center">True score</th>
-                <th :for={board_node <- @nodes} class="text-center font-mono">
-                  {short_name(board_node)}
-                  <span :if={board_node == @node} class="badge badge-ghost badge-xs">this</span>
-                  <span :if={@boards[board_node] == :unreachable} class="badge badge-error badge-xs">
-                    offline
-                  </span>
+              <tr class="bg-base-200">
+                <th class="text-[11px] uppercase tracking-wider opacity-70">Match</th>
+                <th class="text-[11px] uppercase tracking-wider opacity-70">Owner</th>
+                <th class="text-center text-[11px] uppercase tracking-wider opacity-70">
+                  True score
+                </th>
+                <th :for={board_node <- @nodes} class="text-center">
+                  <div class="flex flex-col items-center gap-1">
+                    <span class="font-mono text-xs">{short_name(board_node)}</span>
+                    <span :if={board_node == @node} class="badge badge-ghost badge-xs">this</span>
+                    <span
+                      :if={@boards[board_node] == :unreachable}
+                      class="badge badge-error badge-xs"
+                    >
+                      offline
+                    </span>
+                  </div>
                 </th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
-              <tr :for={match <- @matches} data-match-id={match.id}>
-                <td class="font-mono">{match.id}</td>
-                <td class="font-mono text-sm">{(match.owner && short_name(match.owner)) || "…"}</td>
-                <td class="text-center font-mono text-lg" data-true-score-id={match.id}>
-                  {fmt(match.true_score)}
+              <tr :for={match <- @matches} data-match-id={match.id} class="hover:bg-base-200/60">
+                <td class="font-mono font-medium">{match.id}</td>
+                <td>
+                  <span class="badge badge-ghost badge-sm font-mono">
+                    {(match.owner && short_name(match.owner)) || "…"}
+                  </span>
+                </td>
+                <td class="text-center" data-true-score-id={match.id}>
+                  <.score score={match.true_score} truth?={true} />
                 </td>
                 <td
                   :for={board_node <- @nodes}
-                  class={[
-                    "text-center font-mono text-lg",
-                    stale?(cell(@boards, board_node, match.id), match.true_score) && "text-error"
-                  ]}
+                  class="text-center"
                   data-score-id={match.id}
                   data-node={board_node}
                 >
-                  {fmt(cell(@boards, board_node, match.id))}
+                  <.score
+                    score={cell(@boards, board_node, match.id)}
+                    stale?={stale?(cell(@boards, board_node, match.id), match.true_score)}
+                  />
                 </td>
                 <td class="text-right">
-                  <button
-                    class="btn btn-sm btn-primary"
-                    phx-click="goal"
-                    phx-value-id={match.id}
-                    phx-value-team="home"
-                  >
-                    Goal Home
-                  </button>
-                  <button
-                    class="btn btn-sm btn-secondary"
-                    phx-click="goal"
-                    phx-value-id={match.id}
-                    phx-value-team="away"
-                  >
-                    Goal Away
-                  </button>
+                  <div class="join">
+                    <button
+                      class="btn btn-sm btn-primary join-item"
+                      phx-click="goal"
+                      phx-value-id={match.id}
+                      phx-value-team="home"
+                    >
+                      Goal Home
+                    </button>
+                    <button
+                      class="btn btn-sm btn-warning join-item"
+                      phx-click="goal"
+                      phx-value-id={match.id}
+                      phx-value-team="away"
+                    >
+                      Goal Away
+                    </button>
+                  </div>
                 </td>
               </tr>
             </tbody>

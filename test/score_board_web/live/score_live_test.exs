@@ -15,8 +15,19 @@ defmodule ScoreBoardWeb.ScoreLiveTest do
     {:ok, id: Atom.to_string(test)}
   end
 
-  defp score_cell(view, id) do
-    view |> element(~s{[data-score-id="#{id}"]}) |> render()
+  # The score is rendered as separately coloured spans, so the assertions
+  # read the cell's text rather than its markup.
+  defp score_cell(view, id), do: text(view, ~s{[data-score-id="#{id}"]})
+
+  defp true_score_cell(view, id), do: text(view, ~s{[data-true-score-id="#{id}"]})
+
+  defp text(view, selector) do
+    view
+    |> element(selector)
+    |> render()
+    |> String.replace(~r/<[^>]*>/, "")
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
   end
 
   test "renders the node name", %{conn: conn} do
@@ -48,7 +59,7 @@ defmodule ScoreBoardWeb.ScoreLiveTest do
 
     assert_eventually(fn ->
       assert score_cell(view, id) =~ "1 : 0"
-      assert view |> element(~s{[data-true-score-id="#{id}"]}) |> render() =~ "1 : 0"
+      assert true_score_cell(view, id) =~ "1 : 0"
     end)
   end
 
@@ -64,6 +75,26 @@ defmodule ScoreBoardWeb.ScoreLiveTest do
     view |> element(toggle) |> render_click()
     refute Blip.enabled?()
     assert view |> element("#net-status") |> render() =~ "connected"
+  end
+
+  test "the visualization exposes the anchors the goal animation needs", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    svg = view |> element("#cluster-viz") |> render()
+    assert svg =~ ~s{phx-hook="ClusterFx"}
+    assert svg =~ ~s{id="cluster-fx"}
+    assert svg =~ ~s{data-node-dot="#{node()}"}
+  end
+
+  test "scoring a goal pushes the route the goal takes", %{conn: conn, id: id} do
+    :ok = Matches.create_match(id)
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    view |> element(~s{[data-match-id="#{id}"] button}, "Goal Away") |> render_click()
+
+    # The test cluster is a single node that owns its own matches, so the
+    # goal has nowhere to travel; ClusterVizTest covers the routing itself.
+    assert_push_event(view, "goal-flight", %{team: "away", hops: []})
   end
 
   test "goals scored elsewhere show up live", %{conn: conn, id: id} do
