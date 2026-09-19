@@ -1,120 +1,111 @@
 defmodule ScoreBoard.BoardTest do
-  # Each test runs its own board on its own topic, so tests never share
-  # board state - that is what makes async safe here. Efx resolves the
-  # Helper bindings by walking $ancestors, so both this process and the
-  # board started under the test supervisor see the per-test values.
-  use EfxCase, async: true
+  # Each test runs its own lane (own board, DB, and event bus), so tests never
+  # share state - async safe.
+  use ExUnit.Case, async: true
 
   import ScoreBoard.TestHelpers
 
   alias ScoreBoard.Board
-  alias ScoreBoard.Board.Helper
+  alias ScoreBoard.DB
+  alias ScoreBoard.Lane
+  alias ScoreBoard.Match
   alias ScoreBoard.Matches
 
   setup %{test: test} do
-    board = :"board_#{test}"
-    topic = "#{test}:events"
-    bind(&Helper.name/0, fn -> board end)
-    bind(&Helper.topic/0, fn -> topic end)
-    start_supervised!(Board)
-    {:ok, id: Atom.to_string(test), board: board}
+    lane = start_lane(test)
+    {:ok, lane: lane, id: Atom.to_string(test)}
   end
 
   # Broadcast puts the event in the board's mailbox before returning, and a
   # call is processed strictly after it - after this, ETS is up to date.
-  defp sync(board), do: :sys.get_state(board)
+  defp sync(lane), do: :sys.get_state(Lane.board(lane))
 
-  defp broadcast(event) do
-    ScoreBoard.EchoPubSub.broadcast(Helper.topic(), event)
+  defp broadcast(lane, event) do
+    ScoreBoard.EchoPubSub.broadcast(Lane.pubsub(lane), Match.topic(), event)
   end
 
-  test "derives rows from match_created and goal events", %{id: id, board: board} do
-    broadcast({:match_created, id, %{home: 0, away: 0}, self()})
-    broadcast({:goal, id, :home})
-    sync(board)
+  test "derives rows from match_created and goal events", %{lane: lane, id: id} do
+    broadcast(lane, {:match_created, id, %{home: 0, away: 0}, self()})
+    broadcast(lane, {:goal, id, :home})
+    sync(lane)
 
-    assert {:ok, %{home: 1, away: 0}} = Board.fetch_score(id)
-    assert %{home: 1, away: 0} = Map.fetch!(Board.scores(), id)
+    assert {:ok, %{home: 1, away: 0}} = Board.fetch_score(lane, id)
+    assert %{home: 1, away: 0} = Map.fetch!(Board.scores(lane), id)
   end
 
   @tag capture_log: true
-  test "drops a goal for an unknown match with no DB entry", %{id: id, board: board} do
-    :ok = Board.subscribe()
+  test "drops a goal for an unknown match with no DB entry", %{lane: lane, id: id} do
+    :ok = Board.subscribe(lane)
 
-    broadcast({:goal, id, :away})
-    sync(board)
+    broadcast(lane, {:goal, id, :away})
+    sync(lane)
 
-    # No fabricated row: the board stays consistent and retries the
-    # recovery on the next goal.
-    assert :error = Board.fetch_score(id)
+    assert :error = Board.fetch_score(lane, id)
     refute_receive {:match_added, ^id}
     refute_receive {:score_updated, ^id, _}
   end
 
-  test "goal for an unknown match recovers the full true score", %{id: id, board: board} do
-    :ok = Matches.create_match(id)
-    :ok = Matches.score_goal(id, :home)
-    :ok = Matches.score_goal(id, :home)
+  test "goal for an unknown match recovers the full true score", %{lane: lane, id: id} do
+    # The true score is in the DB but this board never saw the match created
+    # (it missed the events). The next goal must force a recovery from the DB -
+    # the full 2:0 - not a fabricated row counted from zero.
+    :ok = DB.write(lane, id, %{home: 2, away: 0})
 
-    # This board saw none of the above (it listens on its own topic); the
-    # next goal forces it to recover the true score from the DB (matches
-    # write through on every goal), not count from zero.
-    broadcast({:goal, id, :away})
-    sync(board)
+    broadcast(lane, {:goal, id, :away})
+    sync(lane)
 
-    assert {:ok, %{home: 2, away: 0}} = Board.fetch_score(id)
+    assert_eventually(fn -> assert {:ok, %{home: 2, away: 0}} = Board.fetch_score(lane, id) end)
   end
 
-  test "notifies local subscribers after each applied event", %{id: id} do
-    :ok = Board.subscribe()
+  test "notifies local subscribers after each applied event", %{lane: lane, id: id} do
+    :ok = Board.subscribe(lane)
 
-    broadcast({:match_created, id, %{home: 0, away: 0}, self()})
+    broadcast(lane, {:match_created, id, %{home: 0, away: 0}, self()})
     assert_receive {:match_added, ^id}
 
-    broadcast({:goal, id, :home})
+    broadcast(lane, {:goal, id, :home})
     assert_receive {:score_updated, ^id, %{home: 1, away: 0}}
   end
 
-  test "reload/0 overwrites diverged rows from the true scores", %{id: id, board: board} do
-    :ok = Matches.create_match(id)
-    :ok = Matches.score_goal(id, :home)
+  test "reload/1 overwrites diverged rows from the true scores", %{lane: lane, id: id} do
+    :ok = Matches.create_match(lane, id)
+    :ok = Matches.score_goal(lane, id, :home)
 
     # Diverge this board: a creation and a forged goal the match never saw.
-    broadcast({:match_created, id, %{home: 0, away: 0}, self()})
-    broadcast({:goal, id, :away})
-    sync(board)
-    assert {:ok, %{home: 0, away: 1}} = Board.fetch_score(id)
+    broadcast(lane, {:match_created, id, %{home: 0, away: 0}, self()})
+    broadcast(lane, {:goal, id, :away})
+    sync(lane)
+    assert {:ok, %{home: 0, away: 1}} = Board.fetch_score(lane, id)
 
-    assert :ok = Board.reload()
-    assert {:ok, %{home: 1, away: 0}} = Board.fetch_score(id)
+    assert :ok = Board.reload(lane)
+    assert {:ok, %{home: 1, away: 0}} = Board.fetch_score(lane, id)
   end
 
   @tag capture_log: true
-  test "cursor_expired triggers a reload from the true scores", %{id: id, board: board} do
-    :ok = Matches.create_match(id)
-    :ok = Matches.score_goal(id, :home)
+  test "cursor_expired triggers a reload from the true scores", %{lane: lane, id: id} do
+    :ok = Matches.create_match(lane, id)
+    :ok = Matches.score_goal(lane, id, :home)
 
-    # Diverge this board, then simulate falling off a producer's buffer.
-    broadcast({:match_created, id, %{home: 0, away: 0}, self()})
-    broadcast({:goal, id, :away})
-    sync(board)
-    assert {:ok, %{home: 0, away: 1}} = Board.fetch_score(id)
+    broadcast(lane, {:match_created, id, %{home: 0, away: 0}, self()})
+    broadcast(lane, {:goal, id, :away})
+    sync(lane)
+    assert {:ok, %{home: 0, away: 1}} = Board.fetch_score(lane, id)
 
-    :ok = Board.subscribe()
-    broadcast({:cursor_expired, :peer@nohost})
+    :ok = Board.subscribe(lane)
+    broadcast(lane, {:cursor_expired, :peer@nohost})
 
     assert_receive :board_reloaded
-    assert {:ok, %{home: 1, away: 0}} = Board.fetch_score(id)
+    assert {:ok, %{home: 1, away: 0}} = Board.fetch_score(lane, id)
   end
 
-  test "a restarted board rebuilds from the true scores", %{id: id, board: board} do
-    :ok = Matches.create_match(id)
-    :ok = Matches.score_goal(id, :home)
+  test "a restarted board rebuilds from the true scores", %{lane: lane, id: id} do
+    :ok = Matches.create_match(lane, id)
+    :ok = Matches.score_goal(lane, id, :home)
 
-    # Killing the board wipes its ETS table; the restarted board catches up
-    # via the reload it runs in handle_continue. The kill is asynchronous -
-    # wait for the DOWN before polling, or we would read the old table and
-    # let the test end mid-restart.
+    board = Lane.board(lane)
+
+    assert_eventually(fn -> assert {:ok, %{home: 1, away: 0}} = Board.fetch_score(lane, id) end)
+
     old = Process.whereis(board)
     ref = Process.monitor(old)
     Process.exit(old, :kill)
@@ -123,26 +114,25 @@ defmodule ScoreBoard.BoardTest do
     assert_eventually(fn ->
       new = Process.whereis(board)
       assert is_pid(new) and new != old
-      assert {:ok, %{home: 1, away: 0}} = Board.fetch_score(id)
+      assert {:ok, %{home: 1, away: 0}} = Board.fetch_score(lane, id)
     end)
   end
 
-  test "removes a match row when its monitored process dies", %{id: id} do
-    :ok = Board.subscribe()
+  test "removes a match row when its monitored process dies", %{lane: lane, id: id} do
+    :ok = Board.subscribe(lane)
 
-    # The board monitors the match process; when it dies the row is dropped.
     match = spawn(fn -> Process.sleep(:infinity) end)
-    broadcast({:match_created, id, %{home: 0, away: 0}, match})
+    broadcast(lane, {:match_created, id, %{home: 0, away: 0}, match})
     assert_receive {:match_added, ^id}
-    assert {:ok, %{home: 0, away: 0}} = Board.fetch_score(id)
+    assert {:ok, %{home: 0, away: 0}} = Board.fetch_score(lane, id)
 
     Process.exit(match, :kill)
 
     assert_receive {:match_removed, ^id}
-    assert :error = Board.fetch_score(id)
+    assert :error = Board.fetch_score(lane, id)
   end
 
-  test "fetch_score/1 returns :error for unknown ids", %{id: id} do
-    assert :error = Board.fetch_score(id)
+  test "fetch_score/2 returns :error for unknown ids", %{lane: lane, id: id} do
+    assert :error = Board.fetch_score(lane, id)
   end
 end

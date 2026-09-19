@@ -8,6 +8,7 @@ defmodule ScoreBoardWeb.Router do
     plug :put_root_layout, html: {ScoreBoardWeb.Layouts, :root}
     plug :protect_from_forgery
     plug :put_secure_browser_headers
+    plug ScoreBoardWeb.Plugs.Tenant
   end
 
   pipeline :api do

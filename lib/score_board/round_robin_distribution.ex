@@ -32,5 +32,5 @@ defmodule ScoreBoard.RoundRobinDistribution do
   def has_quorum?(_members), do: true
 
   @spec ordinal(Supervisor.child_spec()) :: non_neg_integer()
-  defp ordinal(%{start: {_module, _fun, [{_id, index}]}}), do: index
+  defp ordinal(%{start: {_module, _fun, [{_lane, _id, index}]}}), do: index
 end

@@ -17,44 +17,22 @@ defmodule ScoreBoard.Application do
       ScoreBoardWeb.Telemetry,
       {Cluster.Supervisor, [topologies, [name: ScoreBoard.ClusterSupervisor]]},
       {DNSCluster, query: Application.get_env(:score_board, :dns_cluster_query) || :ignore},
-      # Two PubSub instances side by side: the default (PG2) one carries
-      # transient traffic - LiveView internals and the boards' local UI
-      # notifications - while the EchoPubSub one carries the domain events
-      # that need at-least-once delivery. A blip halts only the event
-      # stream; the UI stays live.
-      Supervisor.child_spec({Phoenix.PubSub, name: ScoreBoard.PubSub}, id: ScoreBoard.PubSub),
-      # buffer_size 20 keeps the overflow demo reachable: hold a blip past
-      # ~20 events and the producer expires this node's cursor
-      Supervisor.child_spec(
-        {Phoenix.PubSub,
-         name: ScoreBoard.EchoPubSub, adapter: EchoPubSub, pool_size: 1, buffer_size: 20},
-        id: ScoreBoard.EchoPubSub
-      ),
+      # The shared, transient PubSub (PG2): LiveView internals and each lane
+      # board's local UI notifications. Per-lane at-least-once event buses live
+      # under the lane pool instead.
+      {Phoenix.PubSub, name: ScoreBoard.PubSub},
       {Horde.Registry, name: ScoreBoard.MatchRegistry, keys: :unique, members: :auto},
-      # Matches start before the board; the board's boot reload then pulls
-      # all scores from the DB in one read
       {Horde.DynamicSupervisor,
        name: ScoreBoard.MatchSupervisor,
        strategy: :one_for_one,
        members: :auto,
        distribution_strategy: ScoreBoard.RoundRobinDistribution,
        process_redistribution: :active},
-      # This node's DB replica: replicated per node, so a node death loses
-      # nothing. Starts before the matches and board that read from it.
-      ScoreBoard.DB,
       # Blocks 500ms so Horde's registries sync the existing cluster before boot.
       {ScoreBoard.BootBarrier, 500},
-      # Claim one match for this node once the cluster has settled.
-      Supervisor.child_spec(
-        {Task,
-         fn ->
-           if Application.get_env(:score_board, :auto_claim_match, true) do
-             ScoreBoard.Matches.claim_one()
-           end
-         end},
-        id: :boot
-      ),
-      ScoreBoard.Board,
+      # The tenant lane pool: per lane, an isolated event bus + DB replica +
+      # board, plus the tracker that assigns a free lane per browser cookie.
+      ScoreBoard.LanePool,
       # Start to serve requests, typically the last entry
       ScoreBoardWeb.Endpoint
     ]

@@ -1,26 +1,32 @@
 defmodule ScoreBoard.Blip do
   @moduledoc """
-  Simulated network blip, backed by echo_pubsub's fault injection.
+  Simulated network blip for one tenant lane, backed by echo_pubsub's
+  per-group fault injection.
 
-  While a blip is on, this node is partitioned in both directions: its
-  EchoPubSub worker rejects incoming batches *below the ack*, and its
-  producer stops delivering outgoing ones. Neither side drops anything -
-  remote producers keep their cursors and buffer, this node buffers its
-  own writes, and both replay in order once the blip ends. Hold a blip
-  long enough to overflow a ring buffer and the lagging node gets
-  `{:cursor_expired, node}` instead, the signal to reload from a source of
-  truth.
+  While a lane is blipped, this node is partitioned in both directions on
+  that lane's event bus: its worker rejects incoming batches and its producer
+  stops delivering outgoing ones. Neither side drops anything - remote
+  producers keep their cursors and buffer, this node buffers its own writes,
+  and both replay in order once the blip ends. Hold a blip long enough to
+  overflow a ring buffer and the lagging node gets `{:cursor_expired, node}`
+  instead, the signal to reload from a source of truth.
+
+  The flag is keyed by the lane's pubsub group, so one lane going offline
+  never touches another.
   """
 
-  @doc "Starts rejecting incoming and outgoing PubSub batches on this node."
-  @spec on() :: :ok
-  def on, do: Application.put_env(:echo_pubsub, :fault_injection, :error)
+  alias EchoPubSub.FaultInjection
+  alias ScoreBoard.Lane
 
-  @doc "Ends the simulated blip; buffered batches replay in order."
-  @spec off() :: :ok
-  def off, do: Application.put_env(:echo_pubsub, :fault_injection, :ok)
+  @doc "Starts rejecting this lane's incoming and outgoing batches on this node."
+  @spec on(Lane.id()) :: :ok
+  def on(lane), do: FaultInjection.put(Lane.pubsub(lane), :error)
 
-  @doc "Whether this node is currently partitioned from PubSub."
-  @spec enabled?() :: boolean()
-  def enabled?, do: Application.get_env(:echo_pubsub, :fault_injection, :ok) == :error
+  @doc "Ends the lane's blip; buffered batches replay in order."
+  @spec off(Lane.id()) :: :ok
+  def off(lane), do: FaultInjection.put(Lane.pubsub(lane), :ok)
+
+  @doc "Whether this lane is currently partitioned on this node."
+  @spec enabled?(Lane.id()) :: boolean()
+  def enabled?(lane), do: not FaultInjection.ok?(Lane.pubsub(lane))
 end

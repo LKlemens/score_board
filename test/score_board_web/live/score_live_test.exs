@@ -1,18 +1,26 @@
 defmodule ScoreBoardWeb.ScoreLiveTest do
-  # Uses the global Matches/Board stack - the real end-to-end event flow.
-  # All assertions are scoped to this test's unique match id, so the tests
-  # can run concurrently.
-  use ScoreBoardWeb.ConnCase, async: true
+  # Shares the app-wide lane pool (each test takes and releases one lane), so
+  # the suite runs serially. Assertions are scoped to this test's match id.
+  use ScoreBoardWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
   import ScoreBoard.TestHelpers
 
   alias ScoreBoard.Blip
+  alias ScoreBoard.Lanes
   alias ScoreBoard.Matches
 
   setup %{test: test} do
-    on_exit(fn -> Blip.off() end)
-    {:ok, id: Atom.to_string(test)}
+    tenant = Atom.to_string(test)
+    {:ok, lane} = Lanes.assign(tenant)
+
+    on_exit(fn ->
+      Blip.off(lane)
+      Lanes.release(tenant)
+    end)
+
+    conn = init_test_session(build_conn(), %{"tenant" => tenant})
+    {:ok, conn: conn, tenant: tenant, lane: lane, id: Atom.to_string(test)}
   end
 
   # The score is rendered as separately coloured spans, so the assertions
@@ -44,15 +52,15 @@ defmodule ScoreBoardWeb.ScoreLiveTest do
     assert svg =~ node() |> Atom.to_string() |> String.split("@") |> hd()
   end
 
-  test "a created match shows up on the board", %{conn: conn, id: id} do
-    :ok = Matches.create_match(id)
+  test "a created match shows up on the board", %{conn: conn, lane: lane, id: id} do
+    :ok = Matches.create_match(lane, id)
     {:ok, view, _html} = live(conn, ~p"/")
 
     assert_eventually(fn -> assert score_cell(view, id) =~ "0 : 0" end)
   end
 
-  test "goal buttons update the score", %{conn: conn, id: id} do
-    :ok = Matches.create_match(id)
+  test "goal buttons update the score", %{conn: conn, lane: lane, id: id} do
+    :ok = Matches.create_match(lane, id)
     {:ok, view, _html} = live(conn, ~p"/")
 
     view |> element(~s{[data-match-id="#{id}"] button}, "Goal Home") |> render_click()
@@ -63,17 +71,20 @@ defmodule ScoreBoardWeb.ScoreLiveTest do
     end)
   end
 
-  test "the per-node toggle flips this node's fault injection and the badge", %{conn: conn} do
+  test "the per-node toggle flips this lane's fault injection and the badge", %{
+    conn: conn,
+    lane: lane
+  } do
     {:ok, view, _html} = live(conn, ~p"/")
 
     toggle = ~s{#cluster-viz [phx-value-node="#{node()}"]}
 
     view |> element(toggle) |> render_click()
-    assert Blip.enabled?()
+    assert Blip.enabled?(lane)
     assert view |> element("#net-status") |> render() =~ "offline"
 
     view |> element(toggle) |> render_click()
-    refute Blip.enabled?()
+    refute Blip.enabled?(lane)
     assert view |> element("#net-status") |> render() =~ "connected"
   end
 
@@ -86,8 +97,8 @@ defmodule ScoreBoardWeb.ScoreLiveTest do
     assert svg =~ ~s{data-node-dot="#{node()}"}
   end
 
-  test "scoring a goal pushes the route the goal takes", %{conn: conn, id: id} do
-    :ok = Matches.create_match(id)
+  test "scoring a goal pushes the route the goal takes", %{conn: conn, lane: lane, id: id} do
+    :ok = Matches.create_match(lane, id)
     {:ok, view, _html} = live(conn, ~p"/")
 
     view |> element(~s{[data-match-id="#{id}"] button}, "Goal Away") |> render_click()
@@ -97,11 +108,11 @@ defmodule ScoreBoardWeb.ScoreLiveTest do
     assert_push_event(view, "goal-flight", %{team: "away", hops: []})
   end
 
-  test "goals scored elsewhere show up live", %{conn: conn, id: id} do
-    :ok = Matches.create_match(id)
+  test "goals scored elsewhere show up live", %{conn: conn, lane: lane, id: id} do
+    :ok = Matches.create_match(lane, id)
     {:ok, view, _html} = live(conn, ~p"/")
 
-    :ok = Matches.score_goal(id, :away)
+    :ok = Matches.score_goal(lane, id, :away)
 
     assert_eventually(fn ->
       assert score_cell(view, id) =~ "0 : 1"

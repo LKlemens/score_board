@@ -10,6 +10,12 @@ import Config
 config :score_board,
   generators: [timestamp_type: :utc_datetime]
 
+# The tenant pool: how many isolated lanes are pre-started, and the ring
+# buffer each lane's event bus keeps (the overflow-reload demo needs a small
+# one).
+config :score_board, :lane_count, 16
+config :score_board, :lane_buffer_size, 20
+
 # Compile echo_pubsub's fault-injection hook into this app's build so the
 # UI blip button can make the local worker reject incoming batches
 config :echo_pubsub, :enable_fault_injection, true

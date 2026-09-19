@@ -1,8 +1,32 @@
 defmodule ScoreBoard.TestHelpers do
   @moduledoc """
-  Shared polling helpers for asserting on eventually-consistent state
-  (Horde registry sync, PubSub-driven ETS updates).
+  Shared helpers: polling for eventually-consistent state, and starting an
+  isolated tenant lane so async tests never share DB/board/event-bus state.
   """
+
+  import ExUnit.Callbacks, only: [start_supervised!: 1]
+
+  alias ScoreBoard.Lane
+
+  @doc """
+  Starts an isolated lane (its own event bus, DB replica, and board) under the
+  test supervisor and returns its id. Each test gets a unique lane, so boards
+  and scores never collide even when tests run async.
+  """
+  @spec start_lane(term()) :: Lane.id()
+  def start_lane(id) do
+    start_supervised!(
+      Supervisor.child_spec(
+        {Phoenix.PubSub,
+         name: Lane.pubsub(id), adapter: EchoPubSub, pool_size: 1, buffer_size: Lane.buffer_size()},
+        id: {:test_bus, id}
+      )
+    )
+
+    start_supervised!(Supervisor.child_spec({ScoreBoard.DB, id}, id: {:test_db, id}))
+    start_supervised!(Supervisor.child_spec({ScoreBoard.Board, id}, id: {:test_board, id}))
+    id
+  end
 
   @doc """
   Retries `fun` on assertion errors and re-raises the real failure on

@@ -1,18 +1,16 @@
 defmodule ScoreBoard.Cluster do
   @moduledoc """
-  This node's snapshot for the cluster page: derived board, blip state,
-  and the echo producer's per-peer backlog - messages written but not yet
-  acknowledged by each peer, i.e. the bucket that drains once the peer's
+  One lane's snapshot for the cluster page: that lane's derived board, blip
+  state, and the lane producer's per-peer backlog - messages written but not
+  yet acknowledged by each peer, i.e. the bucket that drains once the peer's
   connection is back.
   """
 
   alias ScoreBoard.Blip
   alias ScoreBoard.Board
+  alias ScoreBoard.Lane
   alias ScoreBoard.Match
   alias ScoreBoard.Matches
-
-  # pool_size is 1, so the single producer keeps the plain adapter name.
-  @producer ScoreBoard.EchoPubSub.Adapter.Producer
 
   @type snapshot :: %{
           scores: %{Matches.match_id() => Match.score()},
@@ -21,14 +19,14 @@ defmodule ScoreBoard.Cluster do
           capacity: pos_integer() | nil
         }
 
-  @doc "Everything the cluster page needs to render this node."
-  @spec snapshot() :: snapshot()
-  def snapshot do
-    producer = producer_state()
+  @doc "Everything the cluster page needs to render this node for `lane`."
+  @spec snapshot(Lane.id()) :: snapshot()
+  def snapshot(lane) do
+    producer = producer_state(Lane.producer(lane))
 
     %{
-      scores: Board.scores(),
-      blip: Blip.enabled?(),
+      scores: Board.scores(lane),
+      blip: Blip.enabled?(lane),
       pending: pending(producer),
       capacity: capacity(producer)
     }
@@ -36,8 +34,8 @@ defmodule ScoreBoard.Cluster do
 
   # :sys.get_state/2 is a debug API - acceptable for a demo dashboard, and
   # guarded so a busy or restarting producer never breaks rendering.
-  defp producer_state do
-    :sys.get_state(@producer, 300)
+  defp producer_state(name) do
+    :sys.get_state(name, 300)
   catch
     _kind, _reason -> nil
   end

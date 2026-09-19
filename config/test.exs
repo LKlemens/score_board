@@ -3,6 +3,9 @@ import Config
 # No boot-time claiming in tests - each test creates its own matches
 config :score_board, :auto_claim_match, false
 
+# A small lane pool keeps the test boot light while still exercising exhaustion.
+config :score_board, :lane_count, 4
+
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
 config :score_board, ScoreBoardWeb.Endpoint,

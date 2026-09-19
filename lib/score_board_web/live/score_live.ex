@@ -14,46 +14,80 @@ defmodule ScoreBoardWeb.ScoreLive do
   alias ScoreBoard.Blip
   alias ScoreBoard.Board
   alias ScoreBoard.Cluster
+  alias ScoreBoard.Lanes
   alias ScoreBoard.Matches
   alias ScoreBoardWeb.ClusterViz
+
+  # Seeded once per lane so a freshly assigned lane is not an empty page.
+  @seed_matches ~w(POL-GER ESP-FRA)
 
   @poll_interval 500
   @remote_timeout 500
 
   @impl Phoenix.LiveView
-  def mount(_params, _session, socket) do
-    if connected?(socket) do
-      # Local board changes re-render instantly; remote boards are polled,
-      # and node up/down reshapes the columns.
-      Board.subscribe()
-      :net_kernel.monitor_nodes(true)
-      Process.send_after(self(), :poll, @poll_interval)
+  def mount(_params, session, socket) do
+    tenant = session["tenant"] || "anon-#{:erlang.phash2(self())}"
+
+    case Lanes.assign(tenant) do
+      {:ok, lane} ->
+        if connected?(socket) do
+          # Local board changes re-render instantly; remote boards are polled,
+          # and node up/down reshapes the columns.
+          Board.subscribe(lane)
+          :net_kernel.monitor_nodes(true)
+          Process.send_after(self(), :poll, @poll_interval)
+          seed_matches(lane)
+        end
+
+        socket =
+          assign(socket,
+            page_title: "Scoreboard",
+            node: node(),
+            lane: lane,
+            error: nil,
+            blip: Blip.enabled?(lane)
+          )
+
+        {:ok, refresh(socket)}
+
+      {:error, :pool_exhausted} ->
+        socket =
+          assign(socket,
+            page_title: "Scoreboard",
+            node: node(),
+            lane: nil,
+            error: "All demo lanes are busy right now - try again in a moment.",
+            blip: false,
+            nodes: [node()],
+            cluster: %{},
+            boards: %{},
+            matches: []
+          )
+
+        {:ok, socket}
     end
+  end
 
-    socket =
-      assign(socket,
-        page_title: "Scoreboard",
-        node: node(),
-        error: nil,
-        blip: Blip.enabled?()
-      )
-
-    {:ok, refresh(socket)}
+  defp seed_matches(lane) do
+    if Matches.list_matches(lane) == [] do
+      Enum.each(@seed_matches, &Matches.create_match(lane, &1))
+    end
   end
 
   @impl Phoenix.LiveView
   def handle_event("goal", %{"id" => id, "team" => team}, socket) do
-    case Matches.score_goal(id, team_atom(team)) do
+    case Matches.score_goal(socket.assigns.lane, id, team_atom(team)) do
       :ok -> {:noreply, socket |> assign(error: nil) |> push_goal_flight(id, team)}
       {:error, :match_not_found} -> {:noreply, assign(socket, error: "match #{id} is gone")}
     end
   end
 
   def handle_event("toggle-node", %{"node" => node_str}, socket) do
+    lane = socket.assigns.lane
     target = String.to_existing_atom(node_str)
-    toggle_blip(target)
+    toggle_blip(lane, target)
     # Keep the header badge in step when this node was toggled.
-    socket = if target == node(), do: assign(socket, blip: Blip.enabled?()), else: socket
+    socket = if target == node(), do: assign(socket, blip: Blip.enabled?(lane)), else: socket
     {:noreply, refresh(socket)}
   end
 
@@ -78,7 +112,7 @@ defmodule ScoreBoardWeb.ScoreLive do
   # over a link that is down are left out, so a goal visibly stops at a
   # node that has gone offline.
   defp push_goal_flight(socket, id, team) do
-    case owner(id) do
+    case owner(socket.assigns.lane, id) do
       nil -> socket
       owner -> push_event(socket, "goal-flight", %{team: team, hops: hops(socket, owner)})
     end
@@ -106,9 +140,12 @@ defmodule ScoreBoardWeb.ScoreLive do
     end
   end
 
+  defp refresh(%{assigns: %{lane: nil}} = socket), do: socket
+
   defp refresh(socket) do
+    lane = socket.assigns.lane
     nodes = Enum.sort([node() | Node.list()])
-    cluster = Map.new(nodes, &{&1, snapshot_on(&1)})
+    cluster = Map.new(nodes, &{&1, snapshot_on(lane, &1)})
 
     boards =
       Map.new(cluster, fn
@@ -125,46 +162,48 @@ defmodule ScoreBoardWeb.ScoreLive do
       end)
       |> Enum.uniq()
       |> Enum.sort()
-      |> Enum.map(fn id -> %{id: id, owner: owner(id), true_score: true_score(id)} end)
+      |> Enum.map(fn id ->
+        %{id: id, owner: owner(lane, id), true_score: true_score(lane, id)}
+      end)
 
     socket
     |> push_flush(cluster)
     |> assign(nodes: nodes, cluster: cluster, boards: boards, matches: matches)
   end
 
-  defp toggle_blip(target) when target == node() do
-    if Blip.enabled?(), do: Blip.off(), else: Blip.on()
+  defp toggle_blip(lane, target) when target == node() do
+    if Blip.enabled?(lane), do: Blip.off(lane), else: Blip.on(lane)
   end
 
-  defp toggle_blip(target) do
-    if :erpc.call(target, Blip, :enabled?, [], @remote_timeout) do
-      :erpc.call(target, Blip, :off, [], @remote_timeout)
+  defp toggle_blip(lane, target) do
+    if :erpc.call(target, Blip, :enabled?, [lane], @remote_timeout) do
+      :erpc.call(target, Blip, :off, [lane], @remote_timeout)
     else
-      :erpc.call(target, Blip, :on, [], @remote_timeout)
+      :erpc.call(target, Blip, :on, [lane], @remote_timeout)
     end
   catch
     # A node can vanish between listing and toggling.
     _kind, _reason -> :ok
   end
 
-  defp snapshot_on(board_node) when board_node == node(), do: Cluster.snapshot()
+  defp snapshot_on(lane, board_node) when board_node == node(), do: Cluster.snapshot(lane)
 
-  defp snapshot_on(board_node) do
-    :erpc.call(board_node, Cluster, :snapshot, [], @remote_timeout)
+  defp snapshot_on(lane, board_node) do
+    :erpc.call(board_node, Cluster, :snapshot, [lane], @remote_timeout)
   catch
     # A node can vanish between listing and reading.
     _kind, _reason -> :unreachable
   end
 
-  defp owner(id) do
-    case Matches.owner_node(id) do
+  defp owner(lane, id) do
+    case Matches.owner_node(lane, id) do
       {:ok, owner} -> owner
       {:error, :match_not_found} -> nil
     end
   end
 
-  defp true_score(id) do
-    case Matches.score(id) do
+  defp true_score(lane, id) do
+    case Matches.score(lane, id) do
       {:ok, score} -> score
       {:error, :match_not_found} -> nil
     end
