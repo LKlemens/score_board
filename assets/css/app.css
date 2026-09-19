@@ -167,3 +167,28 @@
   transform-origin: center;
   animation: fx-ripple 0.65s ease-out forwards;
 }
+
+/* Overflow reload: rings collapse inward onto the node as it pulls fresh
+   state from the DB - the opposite motion of the outward delivery ripple. */
+@keyframes fx-reload {
+  0% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+  40% {
+    opacity: 0.85;
+  }
+  100% {
+    transform: scale(0.5);
+    opacity: 0;
+  }
+}
+
+.fx-reload {
+  fill: none;
+  stroke: var(--color-error);
+  stroke-width: 3;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: fx-reload 0.7s ease-in forwards;
+}

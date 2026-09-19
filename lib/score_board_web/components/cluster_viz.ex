@@ -259,10 +259,10 @@ defmodule ScoreBoardWeb.ClusterViz do
       iex> was = %{a: %{blip: false, pending: %{b: 3}}, b: %{blip: true, pending: %{a: 0}}}
       iex> now = %{a: %{blip: false, pending: %{b: 0}}, b: %{blip: false, pending: %{a: 0}}}
       iex> ClusterViz.flush_streams(was, now)
-      [%{from: "a", to: "b", count: 3}]
+      [%{from: "a", to: "b", count: 3, mode: "replay"}]
   """
   @spec flush_streams(%{node() => map() | :unreachable}, %{node() => map() | :unreachable}) :: [
-          %{from: String.t(), to: String.t(), count: pos_integer()}
+          %{from: String.t(), to: String.t(), count: pos_integer(), mode: String.t()}
         ]
   def flush_streams(was, now) do
     for {recovered, status} <- now,
@@ -276,19 +276,28 @@ defmodule ScoreBoardWeb.ClusterViz do
         do: stream
   end
 
-  # Both directions of the backlog between a recovered node and one peer.
+  # Both directions of the backlog between a recovered node and one peer. A
+  # stream whose sender overran its ring buffer is a "reload": the receiver's
+  # cursor expired, so it reloads from the DB instead of replaying in order.
   defp backlog(was, peer_status, peer, recovered) do
-    outbound = queued(peer_status, recovered)
-    inbound = queued(Map.get(was, recovered, :unreachable), peer)
+    recovered_was = Map.get(was, recovered, :unreachable)
 
     [
-      outbound > 0 &&
-        %{from: Atom.to_string(peer), to: Atom.to_string(recovered), count: outbound},
-      inbound > 0 &&
-        %{from: Atom.to_string(recovered), to: Atom.to_string(peer), count: inbound}
+      stream(peer, recovered, queued(peer_status, recovered), peer_status),
+      stream(recovered, peer, queued(recovered_was, peer), recovered_was)
     ]
     |> Enum.filter(& &1)
   end
+
+  defp stream(_from, _to, 0, _sender), do: false
+
+  defp stream(from, to, count, sender) do
+    mode = if overflowed?(count, sender), do: "reload", else: "replay"
+    %{from: Atom.to_string(from), to: Atom.to_string(to), count: count, mode: mode}
+  end
+
+  defp overflowed?(count, %{capacity: capacity}) when is_integer(capacity), do: count >= capacity
+  defp overflowed?(_count, _sender), do: false
 
   defp queued(%{pending: pending}, target), do: Map.get(pending, target, 0)
   defp queued(_status, _target), do: 0

@@ -59,8 +59,18 @@ defmodule ScoreBoardWeb.ClusterVizTest do
       now = %{a: up(b: 0), b: up(a: 0)}
 
       assert ClusterViz.flush_streams(was, now) == [
-               %{from: "a", to: "b", count: 4},
-               %{from: "b", to: "a", count: 2}
+               %{from: "a", to: "b", count: 4, mode: "replay"},
+               %{from: "b", to: "a", count: 2, mode: "replay"}
+             ]
+    end
+
+    test "a backlog past the buffer is a reload, not a replay" do
+      was = %{a: up(b: 25), b: blipped(a: 2)}
+      now = %{a: up(b: 0), b: up(a: 0)}
+
+      assert ClusterViz.flush_streams(was, now) == [
+               %{from: "a", to: "b", count: 25, mode: "reload"},
+               %{from: "b", to: "a", count: 2, mode: "replay"}
              ]
     end
 
@@ -68,14 +78,18 @@ defmodule ScoreBoardWeb.ClusterVizTest do
       was = %{a: up(b: 3), b: :unreachable}
       now = %{a: up(b: 0), b: up(a: 0)}
 
-      assert ClusterViz.flush_streams(was, now) == [%{from: "a", to: "b", count: 3}]
+      assert ClusterViz.flush_streams(was, now) == [
+               %{from: "a", to: "b", count: 3, mode: "replay"}
+             ]
     end
 
     test "a peer that is still offline is left out" do
       was = %{a: up(c: 3), b: blipped(c: 5), c: blipped(a: 0, b: 0)}
       now = %{a: up(c: 0), b: blipped(c: 5), c: up(a: 0, b: 0)}
 
-      assert ClusterViz.flush_streams(was, now) == [%{from: "a", to: "c", count: 3}]
+      assert ClusterViz.flush_streams(was, now) == [
+               %{from: "a", to: "c", count: 3, mode: "replay"}
+             ]
     end
 
     test "an empty backlog produces nothing to draw" do

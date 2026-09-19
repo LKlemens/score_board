@@ -3,12 +3,16 @@
 // Two events arrive from the server. "goal-flight" carries the one hop a
 // goal takes - out from the node the match lives on to its peers, with
 // peers behind a downed link already removed. "cluster-flush" carries the
-// backlog a node that just came back online is about to exchange with its
-// peers, and is drawn as a burst of smaller dots.
+// backlog a node that just came back online exchanges with its peers. Each
+// stream is one of two kinds: a "replay" (the backlog fit in the ring
+// buffer) is drawn as a staggered train of dots down the link; a "reload"
+// (the sender overran its buffer, so the receiver's cursor expired and it
+// reloads from the DB instead) is drawn as rings collapsing into the
+// receiving node - no link train, because nothing was replayed in order.
 //
-// Both read the link geometry straight out of the rendered SVG and walk
-// dots along it, drawing into the #cluster-fx group, which LiveView is
-// told to ignore so a re-render cannot delete a dot mid-flight.
+// All read the link geometry straight out of the rendered SVG and draw
+// into the #cluster-fx group, which LiveView is told to ignore so a
+// re-render cannot delete an element mid-flight.
 
 const SVG_NS = "http://www.w3.org/2000/svg"
 const HOP_MS = 520
@@ -18,6 +22,9 @@ const RIPPLE_MS = 650
 const FLUSH_MS = 360
 const FLUSH_GAP_MS = 90
 const FLUSH_MAX = 8
+const RELOAD_MS = 700
+const RELOAD_RINGS = 3
+const RELOAD_GAP_MS = 140
 
 export const ClusterFx = {
   mounted() {
@@ -40,11 +47,23 @@ export const ClusterFx = {
     }
   },
 
-  // A recovered node replays its backlog in order, so the dots leave in a
-  // staggered train rather than all at once. Only the last one lands hard
-  // enough to ripple.
+  // A "replay" backlog leaves in a staggered train (delivered in order, only
+  // the last lands hard enough to ripple). A "reload" backlog is not replayed
+  // at all - the receiver's cursor expired, so it pulls fresh state from the
+  // DB, drawn as rings collapsing into that node. Each reloaded node is drawn
+  // once even when several peers overran it.
   flush({streams}) {
-    (streams || []).forEach(({from, to, count}) => {
+    const reloaded = new Set()
+
+    ;(streams || []).forEach(({from, to, count, mode}) => {
+      if (mode === "reload") {
+        if (!reloaded.has(to)) {
+          reloaded.add(to)
+          this.reloadNode(to)
+        }
+        return
+      }
+
       const burst = Math.min(count, FLUSH_MAX)
 
       for (let index = 0; index < burst; index++) {
@@ -58,6 +77,31 @@ export const ClusterFx = {
         }, index * FLUSH_GAP_MS)
       }
     })
+  },
+
+  // Overflow recovery: the node reloads from the DB. Rings collapse inward
+  // onto it, distinct from the outward ripple a delivered message throws.
+  reloadNode(name) {
+    const dot = this.el.querySelector(`circle[data-node-dot="${name}"]`)
+    const fx = this.overlay()
+    if (!dot || !fx) return
+
+    for (let index = 0; index < RELOAD_RINGS; index++) {
+      const ring = document.createElementNS(SVG_NS, "circle")
+      ring.setAttribute("class", "fx-reload")
+      ring.setAttribute("cx", dot.getAttribute("cx"))
+      ring.setAttribute("cy", dot.getAttribute("cy"))
+      ring.setAttribute("r", "20")
+      ring.style.animationDelay = `${index * RELOAD_GAP_MS}ms`
+
+      fx.appendChild(ring)
+      this.drawn.add(ring)
+
+      setTimeout(() => {
+        this.drawn.delete(ring)
+        ring.remove()
+      }, RELOAD_MS + index * RELOAD_GAP_MS)
+    }
   },
 
   // The graph draws one path per unordered pair, so a hop may have to be
