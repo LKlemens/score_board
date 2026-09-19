@@ -1,0 +1,28 @@
+# One machine = one isolated 3-node cluster (see rel/overlays/bin/cluster_start.sh).
+# Deploy from the repo directory:
+#
+#   fly deploy
+#
+# Secrets required before first deploy:
+#   fly secrets set SECRET_KEY_BASE=$(mix phx.gen.secret) PHX_HOST=scoreboard-pool.fly.dev
+#
+# Do NOT set DNS_CLUSTER_QUERY: machines must stay isolated (no cross-machine cluster).
+
+app = "scoreboard-pool"
+primary_region = "fra"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Warm pool: keep machines running so assignment is instant (Phase 3).
+  auto_stop_machines = false
+  auto_start_machines = false
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  # Three BEAM VMs per machine; give them headroom.
+  memory = "1gb"
