@@ -317,7 +317,7 @@ defmodule ScoreBoardWeb.ClusterViz do
           [{160, @line_center_y}, {560, @line_center_y}]
 
         count ->
-          for index <- 0..(count - 1) do
+          for index <- 0..(count - 1)//1 do
             angle = 2 * :math.pi() * index / count - :math.pi() / 2
 
             {round(@center_x + @polygon_radius * :math.cos(angle)),
@@ -331,7 +331,8 @@ defmodule ScoreBoardWeb.ClusterViz do
   defp circles(nodes, positions, cluster, self_node) do
     for viz_node <- nodes do
       {x, y} = positions[viz_node]
-      status = cluster[viz_node]
+      # A node with no snapshot yet (nil) reads the same as unreachable.
+      status = cluster[viz_node] || :unreachable
 
       tone =
         cond do

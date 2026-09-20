@@ -7,6 +7,7 @@ defmodule ScoreBoardWeb.ScoreLiveTest do
   import ScoreBoard.TestHelpers
 
   alias ScoreBoard.Blip
+  alias ScoreBoard.Lane
   alias ScoreBoard.Lanes
   alias ScoreBoard.Matches
 
@@ -117,5 +118,28 @@ defmodule ScoreBoardWeb.ScoreLiveTest do
     assert_eventually(fn ->
       assert score_cell(view, id) =~ "0 : 1"
     end)
+  end
+
+  test "a freshly assigned lane opens a match on each node", %{conn: conn, lane: lane} do
+    me = node()
+    {:ok, _view, _html} = live(conn, ~p"/")
+
+    assert_eventually(fn ->
+      ids = Matches.list_matches(lane)
+      assert ids != []
+      for match_id <- ids, do: assert({:ok, ^me} = Matches.owner_node(lane, match_id))
+    end)
+  end
+
+  test "a full pool shows the busy page instead of crashing" do
+    # setup already holds one lane; take the rest, then a new tenant is refused.
+    drainers = for i <- 1..(Lane.count() - 1), do: "drain-#{i}"
+    on_exit(fn -> Enum.each(drainers, &Lanes.release/1) end)
+    Enum.each(drainers, fn tenant -> assert {:ok, _lane} = Lanes.assign(tenant) end)
+
+    conn = init_test_session(build_conn(), %{"tenant" => "no-lane-#{System.unique_integer()}"})
+    {:ok, _view, html} = live(conn, ~p"/")
+
+    assert html =~ "busy"
   end
 end

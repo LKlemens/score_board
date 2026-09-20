@@ -38,15 +38,16 @@ defmodule ScoreBoard.LanesTest do
   end
 
   test "an exhausted pool is rejected, and frees up again after release" do
-    tenants = for i <- 1..(Lane.count() + 1), do: "drainer-#{i}"
+    [first | _] = tenants = for i <- 1..(Lane.count() + 1), do: "drainer-#{i}"
+    last = List.last(tenants)
     on_exit(fn -> Enum.each(tenants, &Lanes.release/1) end)
 
     results = Enum.map(tenants, &Lanes.assign/1)
     assert Enum.count(results, &match?({:ok, _}, &1)) == Lane.count()
     assert List.last(results) == {:error, :pool_exhausted}
 
-    :ok = Lanes.release(hd(tenants))
-    assert {:ok, _id} = Lanes.assign(List.last(tenants))
+    :ok = Lanes.release(first)
+    assert {:ok, _id} = Lanes.assign(last)
   end
 
   test "each lane runs its own event bus, faultable in isolation" do

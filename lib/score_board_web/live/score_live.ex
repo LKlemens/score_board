@@ -18,8 +18,12 @@ defmodule ScoreBoardWeb.ScoreLive do
   alias ScoreBoard.Matches
   alias ScoreBoardWeb.ClusterViz
 
-  # Seeded once per lane so a freshly assigned lane is not an empty page.
-  @seed_matches ~w(POL-GER ESP-FRA)
+  # Fixtures seeded into a fresh lane - one per node, in order, so each node
+  # owns a match. Long enough for any realistic node count.
+  @seed_pool ~w(
+    POL-GER ESP-FRA BRA-ARG ENG-ITA NED-POR BEL-CRO URU-COL MEX-USA JPN-KOR
+    SEN-MAR SUI-SWE DEN-NOR AUT-CZE SCO-WAL GRE-TUR UKR-SRB NGA-GHA CHI-PER
+  )
 
   @poll_interval 500
   @remote_timeout 500
@@ -58,7 +62,7 @@ defmodule ScoreBoardWeb.ScoreLive do
             lane: nil,
             error: "All demo lanes are busy right now - try again in a moment.",
             blip: false,
-            nodes: [node()],
+            nodes: [],
             cluster: %{},
             boards: %{},
             matches: []
@@ -68,17 +72,24 @@ defmodule ScoreBoardWeb.ScoreLive do
     end
   end
 
+  # Open one match per node. The explicit ordinal 0..n-1 drives
+  # RoundRobinDistribution to place one match on each node.
   defp seed_matches(lane) do
     if Matches.list_matches(lane) == [] do
-      Enum.each(@seed_matches, &Matches.create_match(lane, &1))
+      nodes = Enum.sort([node() | Node.list()])
+
+      @seed_pool
+      |> Enum.take(length(nodes))
+      |> Enum.with_index()
+      |> Enum.each(fn {id, index} -> Matches.create_match(lane, id, index) end)
     end
   end
 
   @impl Phoenix.LiveView
   def handle_event("goal", %{"id" => id, "team" => team}, socket) do
-    case Matches.score_goal(socket.assigns.lane, id, team_atom(team)) do
+    case score_goal_healing(socket.assigns.lane, id, team_atom(team)) do
       :ok -> {:noreply, socket |> assign(error: nil) |> push_goal_flight(id, team)}
-      {:error, :match_not_found} -> {:noreply, assign(socket, error: "match #{id} is gone")}
+      {:error, :match_not_found} -> {:noreply, assign(socket, error: "Match #{id} is gone.")}
     end
   end
 
@@ -106,6 +117,20 @@ defmodule ScoreBoardWeb.ScoreLive do
 
   defp team_atom("home"), do: :home
   defp team_atom("away"), do: :away
+
+  # A board row can outlive its match process (a failover mid-move, a crash).
+  # The score is still in the DB, so recreate the match - it restores from the
+  # DB - and retry once, instead of failing the click.
+  defp score_goal_healing(lane, id, team) do
+    case Matches.score_goal(lane, id, team) do
+      :ok ->
+        :ok
+
+      {:error, :match_not_found} ->
+        Matches.create_match(lane, id)
+        Matches.score_goal(lane, id, team)
+    end
+  end
 
   # Tell the browser to fly the goal along the path it really takes: this
   # node hands it to the match owner, the owner broadcasts it out. Hops
@@ -261,7 +286,14 @@ defmodule ScoreBoardWeb.ScoreLive do
 
         <ClusterViz.cluster_viz nodes={@nodes} cluster={@cluster} node={@node} />
 
-        <p :if={@error} class="text-error text-center text-sm">{@error}</p>
+        <div
+          :if={@error}
+          role="alert"
+          class="alert alert-error max-w-xl mx-auto shadow-lg text-base font-semibold"
+        >
+          <span class="text-xl">⚠</span>
+          <span>{@error}</span>
+        </div>
 
         <div
           :if={@matches != []}
