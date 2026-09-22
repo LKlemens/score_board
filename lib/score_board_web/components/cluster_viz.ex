@@ -117,6 +117,7 @@ defmodule ScoreBoardWeb.ClusterViz do
             height="24"
             rx="8"
             class={circle.missing_class}
+            data-missing-box={circle.node}
           />
           <text
             x={circle.badge_x + 19}
@@ -191,11 +192,11 @@ defmodule ScoreBoardWeb.ClusterViz do
       <g id="cluster-fx" phx-update="ignore"></g>
     </svg>
     <p class="text-center text-xs opacity-60 -mt-2">
-      faint dots = ambient traffic &nbsp;•&nbsp; bright comet = the goal you
-      just scored leaving the node its match lives on &nbsp;•&nbsp; blue
-      burst = a node back online replaying what was buffered &nbsp;•&nbsp;
-      box next to a node = messages it is missing &nbsp;•&nbsp; red box =
-      past the buffer, node will reload instead of replay
+      faint dots = ambient traffic &nbsp;•&nbsp; bright comet = a single goal
+      leaving the node its match lives on &nbsp;•&nbsp; convoy = a node back
+      online syncing its buffered backlog &nbsp;•&nbsp; box next to a node =
+      messages it is buffering for an offline peer &nbsp;•&nbsp; red box = past
+      the buffer, the peer will reload instead of replay
     </p>
     """
   end
@@ -367,46 +368,21 @@ defmodule ScoreBoardWeb.ClusterViz do
     end
   end
 
-  # How many messages a node is out of sync by, counting both directions so an
-  # offline node shows a box no matter which match was scored:
-  #
-  #   * inbound - what each peer buffered *toward* this node (it hasn't received);
-  #     peers buffer disjoint sets, so this is their sum;
-  #   * outbound - what this node buffered *toward* its peers (it hasn't sent);
-  #     the same messages go to every peer, so this is the max, not the sum.
-  #
-  # Expiry is per backlog: one crossing the ring buffer means reload, not replay.
+  # How many messages this node is buffering for its peers - its own producer's
+  # backlog of undelivered sends. The box sits on the node holding the buffer
+  # (the sender whose peer is offline, or an offline node buffering its own
+  # sends), not on the peer that is merely behind. The same messages go to
+  # every lagging peer, so it is the max across them, not the sum. Overflow
+  # (past the ring buffer) means the lagging peer will reload instead of replay.
   defp missing(cluster, node) do
-    inbound =
-      cluster
-      |> Map.delete(node)
-      |> Map.values()
-      |> Enum.map(fn
-        %{pending: pending, capacity: capacity} -> {Map.get(pending, node, 0), capacity}
-        _unreachable -> {0, nil}
-      end)
+    case cluster[node] do
+      %{pending: pending, capacity: capacity} ->
+        buffered = pending |> Map.values() |> Enum.max(fn -> 0 end)
+        {buffered, capacity != nil and buffered >= capacity, capacity}
 
-    outbound =
-      case cluster[node] do
-        %{pending: pending, capacity: capacity} ->
-          [{pending |> Map.values() |> Enum.max(fn -> 0 end), capacity}]
-
-        _ ->
-          [{0, nil}]
-      end
-
-    backlogs = inbound ++ outbound
-
-    total = backlogs |> Enum.map(fn {count, _capacity} -> count end) |> Enum.sum()
-    expired? = Enum.any?(backlogs, fn {c, cap} -> cap != nil and c >= cap end)
-
-    capacity =
-      backlogs
-      |> Enum.map(fn {_c, cap} -> cap end)
-      |> Enum.reject(&is_nil/1)
-      |> Enum.max(fn -> nil end)
-
-    {total, expired?, capacity}
+      _unreachable ->
+        {0, false, nil}
+    end
   end
 
   defp links(nodes, positions, cluster) do

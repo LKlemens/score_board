@@ -1,14 +1,14 @@
 // Draws cluster traffic that is worth watching.
 //
 // Two events arrive from the server. "goal-flight" carries the one hop a
-// goal takes - out from the node the match lives on to its peers, with
-// peers behind a downed link already removed. "cluster-flush" carries the
-// backlog a node that just came back online exchanges with its peers. Each
-// stream is one of two kinds: a "replay" (the backlog fit in the ring
-// buffer) is drawn as a staggered train of dots down the link; a "reload"
-// (the sender overran its buffer, so the receiver's cursor expired and it
-// reloads from the DB instead) is drawn as rings collapsing into the
-// receiving node - no link train, because nothing was replayed in order.
+// single goal takes - a comet streak out from the node the match lives on to
+// its peers (peers behind a downed link are already removed). "cluster-flush"
+// carries the backlog a node that just came back online exchanges with its
+// peers, drawn deliberately differently: a "replay" (the backlog fit in the
+// ring buffer) is a convoy of dots travelling together down the link (see
+// syncStream); a "reload" (the sender overran its buffer, so the receiver's
+// cursor expired) is rings collapsing into the receiving node - no convoy,
+// because nothing was replayed in order.
 //
 // All read the link geometry straight out of the rendered SVG and draw
 // into the #cluster-fx group, which LiveView is told to ignore so a
@@ -19,12 +19,13 @@ const HOP_MS = 520
 const TRAIL = 6
 const TRAIL_GAP = 7
 const RIPPLE_MS = 650
-const FLUSH_MS = 360
-const FLUSH_GAP_MS = 90
-const FLUSH_MAX = 8
 const RELOAD_MS = 700
 const RELOAD_RINGS = 3
 const RELOAD_GAP_MS = 140
+const BATCH_MS = 760
+const BATCH_MAX = 12
+const BATCH_SPREAD = 20
+const DRAIN_MS = 700
 
 export const ClusterFx = {
   mounted() {
@@ -47,13 +48,14 @@ export const ClusterFx = {
     }
   },
 
-  // A "replay" backlog leaves in a staggered train (delivered in order, only
-  // the last lands hard enough to ripple). A "reload" backlog is not replayed
-  // at all - the receiver's cursor expired, so it pulls fresh state from the
-  // DB, drawn as rings collapsing into that node. Each reloaded node is drawn
-  // once even when several peers overran it.
+  // A "replay" backlog flushes as one convoy of dots moving together down the
+  // link (see syncStream) - deliberately unlike a single goal's comet streak.
+  // A "reload" backlog is not replayed at all - the receiver's cursor expired,
+  // so it pulls fresh state from the DB, drawn as rings collapsing into that
+  // node. Each reloaded node is drawn once even when several peers overran it.
   flush({streams}) {
     const reloaded = new Set()
+    const drained = new Set()
 
     ;(streams || []).forEach(({from, to, count, mode}) => {
       if (mode === "reload") {
@@ -61,22 +63,90 @@ export const ClusterFx = {
           reloaded.add(to)
           this.reloadNode(to)
         }
-        return
-      }
-
-      const burst = Math.min(count, FLUSH_MAX)
-
-      for (let index = 0; index < burst; index++) {
-        setTimeout(() => {
-          if (!this.alive) return
-          this.comet(from, to, "flush", {
-            size: 4,
-            ms: FLUSH_MS,
-            ripple: index === burst - 1
-          })
-        }, index * FLUSH_GAP_MS)
+      } else {
+        // The buffering node's box empties as its convoy leaves; draw the drain
+        // once even if it flushes to several peers.
+        if (!drained.has(from)) {
+          drained.add(from)
+          this.drainBox(from)
+        }
+        this.syncStream(from, to, count)
       }
     })
+  },
+
+  // The count box popping and fading as the backlog it held drains out. Cloned
+  // into the ignored overlay so LiveView's next poll (which removes the real
+  // box) cannot cut the animation short.
+  drainBox(node) {
+    const box = this.el.querySelector(`[data-missing-box="${node}"]`)
+    const fx = this.overlay()
+    if (!box || !fx) return
+
+    const clone = box.cloneNode(false)
+    clone.setAttribute("class", "fx-drain")
+    fx.appendChild(clone)
+    this.drawn.add(clone)
+
+    setTimeout(() => {
+      this.drawn.delete(clone)
+      clone.remove()
+    }, DRAIN_MS)
+  },
+
+  // The buffered backlog draining on reconnect: a whole packet of dots spaced
+  // out and travelling together as a convoy, in its own colour, landing with a
+  // firm ripple. Reads as "a batch syncing", distinct from the single comet a
+  // live goal draws.
+  syncStream(from, to, count) {
+    const link = this.link(from, to)
+    const fx = this.overlay()
+    if (!link || !fx || link.path.dataset.healthy !== "true") return
+
+    const total = link.path.getTotalLength()
+    const n = Math.max(2, Math.min(count, BATCH_MAX))
+    const group = document.createElementNS(SVG_NS, "g")
+    group.setAttribute("class", "fx-comet fx-sync")
+
+    const dots = []
+    for (let index = 0; index < n; index++) {
+      const dot = document.createElementNS(SVG_NS, "circle")
+      dot.setAttribute("r", "3.5")
+      group.appendChild(dot)
+      dots.push(dot)
+    }
+
+    fx.appendChild(group)
+    this.drawn.add(group)
+
+    const started = performance.now()
+
+    const step = now => {
+      if (!this.alive || !group.isConnected) return
+
+      const fraction = Math.min(1, (now - started) / BATCH_MS)
+      const eased = fraction * fraction * (3 - 2 * fraction)
+
+      dots.forEach((dot, index) => {
+        const travelled = eased * total - index * BATCH_SPREAD
+        if (travelled < 0 || travelled > total) {
+          dot.setAttribute("opacity", "0")
+        } else {
+          dot.setAttribute("opacity", "0.95")
+          const at = link.path.getPointAtLength(link.reverse ? total - travelled : travelled)
+          dot.setAttribute("cx", at.x)
+          dot.setAttribute("cy", at.y)
+        }
+      })
+
+      if (fraction < 1) return requestAnimationFrame(step)
+
+      this.drawn.delete(group)
+      group.remove()
+      this.ripple(to, "sync")
+    }
+
+    requestAnimationFrame(step)
   },
 
   // Overflow recovery: the node reloads from the DB. Rings collapse inward
