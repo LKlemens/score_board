@@ -17,3 +17,7 @@ board n:
 # Start a node with a custom name and port: just node scores 5000
 node name port:
     PORT={{ port }} iex --sname {{ name }} -S mix phx.server
+
+# Deploy to fly.io (one machine = one 3-node cluster). One-time setup in DEPLOY.md.
+deploy:
+    fly deploy --ha=false

@@ -129,6 +129,7 @@
   --fx-home: var(--color-primary);
   --fx-away: var(--color-warning);
   --fx-flush: var(--color-info);
+  --fx-sync: var(--color-secondary);
 }
 
 .fx-home {
@@ -141,6 +142,10 @@
 
 .fx-flush {
   --fx-color: var(--fx-flush);
+}
+
+.fx-sync {
+  --fx-color: var(--fx-sync);
 }
 
 .fx-comet circle {
@@ -191,4 +196,24 @@
   transform-box: fill-box;
   transform-origin: center;
   animation: fx-reload 0.7s ease-in forwards;
+}
+
+/* The missing-count box emptying on batch sync: it swells and fades as its
+   backlog convoys out. */
+@keyframes fx-drain {
+  0% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+
+.fx-drain {
+  fill: var(--color-secondary);
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: fx-drain 0.7s ease-out forwards;
 }

@@ -13,8 +13,9 @@ defmodule ScoreBoardWeb.ClusterViz do
   JavaScript hook: it reads the link geometry out of this SVG and flies a
   comet along it. The empty `cluster-fx` group is where those temporary
   elements live; it is marked `phx-update="ignore"` so the half-second
-  poll cannot wipe a comet mid-flight. The same hook replays a node's
-  buffered backlog as a burst of dots when that node comes back online.
+  poll cannot wipe a comet mid-flight. When a node comes back online the hook
+  flushes its buffered backlog as a convoy of dots and drains that node's
+  count box.
   """
   use Phoenix.Component
 
@@ -117,6 +118,7 @@ defmodule ScoreBoardWeb.ClusterViz do
             height="24"
             rx="8"
             class={circle.missing_class}
+            data-missing-box={circle.node}
           />
           <text
             x={circle.badge_x + 19}
@@ -191,11 +193,12 @@ defmodule ScoreBoardWeb.ClusterViz do
       <g id="cluster-fx" phx-update="ignore"></g>
     </svg>
     <p class="text-center text-xs opacity-60 -mt-2">
-      faint dots = ambient traffic &nbsp;•&nbsp; bright comet = the goal you
-      just scored leaving the node its match lives on &nbsp;•&nbsp; blue
-      burst = a node back online replaying what was buffered &nbsp;•&nbsp;
-      box next to a node = messages it is missing &nbsp;•&nbsp; red box =
-      past the buffer, node will reload instead of replay
+      faint dots = ambient traffic &nbsp;•&nbsp; bright comet = a single goal
+      leaving the node its match lives on &nbsp;•&nbsp; convoy = buffered
+      messages replaying to a node back online (the buffering node's box drains)
+      &nbsp;•&nbsp; box next to a node = messages it is buffering for an offline
+      peer &nbsp;•&nbsp; red box = past the buffer, the peer will reload instead
+      of replay
     </p>
     """
   end
@@ -366,30 +369,21 @@ defmodule ScoreBoardWeb.ClusterViz do
     end
   end
 
-  # How many messages this node is missing. Each peer only buffers what it
-  # produced itself, so the backlogs are disjoint and the node is behind by
-  # their sum. Expiry is still per sender: one peer overrunning its ring
-  # buffer is enough for the node to reload instead of replaying.
-  defp missing(cluster, receiver) do
-    backlogs =
-      cluster
-      |> Map.delete(receiver)
-      |> Map.values()
-      |> Enum.map(fn
-        %{pending: pending, capacity: capacity} -> {Map.get(pending, receiver, 0), capacity}
-        _unreachable -> {0, nil}
-      end)
+  # How many messages this node is buffering for its peers - its own producer's
+  # backlog of undelivered sends. The box sits on the node holding the buffer
+  # (the sender whose peer is offline, or an offline node buffering its own
+  # sends), not on the peer that is merely behind. The same messages go to every
+  # lagging peer, so it is the max across them, not the sum. Overflow (past the
+  # ring buffer) means the lagging peer will reload instead of replay.
+  defp missing(cluster, node) do
+    case cluster[node] do
+      %{pending: pending, capacity: capacity} ->
+        buffered = pending |> Map.values() |> Enum.max(fn -> 0 end)
+        {buffered, capacity != nil and buffered >= capacity, capacity}
 
-    total = backlogs |> Enum.map(fn {count, _capacity} -> count end) |> Enum.sum()
-    expired? = Enum.any?(backlogs, fn {c, cap} -> cap != nil and c >= cap end)
-
-    capacity =
-      backlogs
-      |> Enum.map(fn {_c, cap} -> cap end)
-      |> Enum.reject(&is_nil/1)
-      |> Enum.max(fn -> nil end)
-
-    {total, expired?, capacity}
+      _unreachable ->
+        {0, false, nil}
+    end
   end
 
   defp links(nodes, positions, cluster) do
