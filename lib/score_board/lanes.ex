@@ -12,6 +12,7 @@ defmodule ScoreBoard.Lanes do
   use GenServer
 
   alias ScoreBoard.Lane
+  alias ScoreBoard.Matches
 
   @type tenant :: String.t()
 
@@ -31,7 +32,11 @@ defmodule ScoreBoard.Lanes do
   def lane_for(tenant), do: GenServer.call(__MODULE__, {:lane_for, tenant})
 
   @impl GenServer
-  def init(:ok), do: {:ok, %{free: Lane.ids(), taken: %{}}}
+  def init(:ok) do
+    # A node joining/leaving reshapes how many markets each active lane needs.
+    :net_kernel.monitor_nodes(true)
+    {:ok, %{free: Lane.ids(), taken: %{}}}
+  end
 
   @impl GenServer
   def handle_call({:assign, tenant}, _from, state) do
@@ -45,6 +50,9 @@ defmodule ScoreBoard.Lanes do
             {:reply, {:error, :pool_exhausted}, state}
 
           [id | rest] ->
+            # Seed the lane's markets now - at runtime the cluster is connected
+            # (BootBarrier settled Horde at boot), so RoundRobin places one per node.
+            Matches.ensure_markets(id)
             {:reply, {:ok, id}, %{state | free: rest, taken: Map.put(state.taken, tenant, id)}}
         end
     end
@@ -61,5 +69,13 @@ defmodule ScoreBoard.Lanes do
   @impl GenServer
   def handle_call({:lane_for, tenant}, _from, state) do
     {:reply, Map.fetch(state.taken, tenant), state}
+  end
+
+  # Node count changed: top up every active lane so markets track node count.
+  # Only the web node holds taken lanes, so elsewhere this is a no-op.
+  @impl GenServer
+  def handle_info({node_event, _node}, state) when node_event in [:nodeup, :nodedown] do
+    for {_tenant, lane} <- state.taken, do: Matches.ensure_markets(lane)
+    {:noreply, state}
   end
 end

@@ -26,6 +26,32 @@ defmodule ScoreBoard.Matches do
 
   @type match_id :: String.t()
 
+  # Fixtures used to seed a lane - one per node, in order. Long enough for any
+  # realistic node count.
+  @match_pool ~w(
+    POL-GER ESP-FRA BRA-ARG ENG-ITA NED-POR BEL-CRO URU-COL MEX-USA JPN-KOR
+    SEN-MAR SUI-SWE DEN-NOR AUT-CZE SCO-WAL GRE-TUR UKR-SRB NGA-GHA CHI-PER
+  )
+
+  @doc """
+  Ensures a lane has one market per node.
+
+  Creates `length([node() | Node.list()])` matches with ordinals `0..n-1`;
+  `ScoreBoard.RoundRobinDistribution` places ordinal `i` on the i-th sorted
+  node, so they land one per node. Idempotent (`:already_exists` for ones
+  already up), so it also tops up when a node joins - Horde `:active`
+  redistribution then rebalances to keep one per node.
+  """
+  @spec ensure_markets(Lane.id()) :: :ok
+  def ensure_markets(lane) do
+    nodes = Enum.sort([node() | Node.list()])
+
+    @match_pool
+    |> Enum.take(length(nodes))
+    |> Enum.with_index()
+    |> Enum.each(fn {id, index} -> create_match(lane, id, index) end)
+  end
+
   @doc """
   Starts a match process for `lane` somewhere in the cluster.
 

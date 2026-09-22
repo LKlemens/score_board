@@ -15,6 +15,7 @@ defmodule ScoreBoard.Board do
 
   require Logger
 
+  alias ScoreBoard.Blip
   alias ScoreBoard.DB
   alias ScoreBoard.EchoPubSub
   alias ScoreBoard.Lane
@@ -74,6 +75,7 @@ defmodule ScoreBoard.Board do
     # Match events ride the lane's EchoPubSub instance; the board's own update
     # notifications stay on the shared (PG2) instance.
     :ok = EchoPubSub.subscribe(Lane.pubsub(lane), Match.topic())
+
     {:ok, %{lane: lane, table: table, by_ref: %{}, by_id: %{}}, {:continue, :reload}}
   end
 
@@ -104,17 +106,13 @@ defmodule ScoreBoard.Board do
   end
 
   @impl GenServer
-  def handle_info({:match_created, id, %{home: home, away: away}, pid}, state) do
-    # Overwrite, not insert_new: a restarted or moved match re-announces
-    # itself with its current score and the row must follow it.
-    :ets.insert(state.table, {id, home, away})
-    notify(state, {:match_added, id})
-    {:noreply, monitor_match(id, pid, state)}
+  def handle_info({:match_created, id, score, pid}, state) do
+    {:noreply, ingest(state, fn s -> apply_created(id, score, pid, s) end)}
   end
 
   @impl GenServer
   def handle_info({:goal, id, team}, state) do
-    {:noreply, apply_goal(id, team, state)}
+    {:noreply, ingest(state, fn s -> apply_goal(id, team, s) end)}
   end
 
   @impl GenServer
@@ -146,6 +144,21 @@ defmodule ScoreBoard.Board do
         notify(state, {:match_removed, id})
         {:noreply, %{state | by_ref: by_ref, by_id: Map.delete(state.by_id, id)}}
     end
+  end
+
+  # Local delivery bypasses echo's fault gate, so a blipped node would still see
+  # events. Gate here too: while offline the board freezes (drops events).
+  # Recovery is the explicit `reload/1` that going back online triggers.
+  defp ingest(state, apply_fun) do
+    if Blip.enabled?(state.lane), do: state, else: apply_fun.(state)
+  end
+
+  # Overwrite, not insert_new: a restarted or moved match re-announces itself
+  # with its current score and the row must follow it.
+  defp apply_created(id, %{home: home, away: away}, pid, state) do
+    :ets.insert(state.table, {id, home, away})
+    notify(state, {:match_added, id})
+    monitor_match(id, pid, state)
   end
 
   defp apply_goal(id, team, state) do

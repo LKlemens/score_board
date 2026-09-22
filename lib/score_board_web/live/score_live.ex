@@ -18,13 +18,6 @@ defmodule ScoreBoardWeb.ScoreLive do
   alias ScoreBoard.Matches
   alias ScoreBoardWeb.ClusterViz
 
-  # Fixtures seeded into a fresh lane - one per node, in order, so each node
-  # owns a match. Long enough for any realistic node count.
-  @seed_pool ~w(
-    POL-GER ESP-FRA BRA-ARG ENG-ITA NED-POR BEL-CRO URU-COL MEX-USA JPN-KOR
-    SEN-MAR SUI-SWE DEN-NOR AUT-CZE SCO-WAL GRE-TUR UKR-SRB NGA-GHA CHI-PER
-  )
-
   @poll_interval 500
   @remote_timeout 500
 
@@ -40,7 +33,6 @@ defmodule ScoreBoardWeb.ScoreLive do
           Board.subscribe(lane)
           :net_kernel.monitor_nodes(true)
           Process.send_after(self(), :poll, @poll_interval)
-          seed_matches(lane)
         end
 
         socket =
@@ -69,19 +61,6 @@ defmodule ScoreBoardWeb.ScoreLive do
           )
 
         {:ok, socket}
-    end
-  end
-
-  # Open one match per node. The explicit ordinal 0..n-1 drives
-  # RoundRobinDistribution to place one match on each node.
-  defp seed_matches(lane) do
-    if Matches.list_matches(lane) == [] do
-      nodes = Enum.sort([node() | Node.list()])
-
-      @seed_pool
-      |> Enum.take(length(nodes))
-      |> Enum.with_index()
-      |> Enum.each(fn {id, index} -> Matches.create_match(lane, id, index) end)
     end
   end
 
@@ -197,12 +176,19 @@ defmodule ScoreBoardWeb.ScoreLive do
   end
 
   defp toggle_blip(lane, target) when target == node() do
-    if Blip.enabled?(lane), do: Blip.off(lane), else: Blip.on(lane)
+    if Blip.enabled?(lane) do
+      Blip.off(lane)
+      # Coming back online: catch the frozen board up to the truth at once.
+      Board.reload(lane)
+    else
+      Blip.on(lane)
+    end
   end
 
   defp toggle_blip(lane, target) do
     if :erpc.call(target, Blip, :enabled?, [lane], @remote_timeout) do
       :erpc.call(target, Blip, :off, [lane], @remote_timeout)
+      :erpc.call(target, Board, :reload, [lane], @remote_timeout)
     else
       :erpc.call(target, Blip, :on, [lane], @remote_timeout)
     end

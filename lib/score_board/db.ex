@@ -35,15 +35,24 @@ defmodule ScoreBoard.DB do
 
   @doc "The stored score for a match in `lane`, read from the local replica."
   @spec read(Lane.id(), Matches.match_id()) :: {:ok, Match.score()} | :error
-  def read(lane, id), do: GenServer.call(Lane.db(lane), {:read, id})
+  def read(lane, id), do: safe_call(lane, {:read, id}, :error)
 
   @doc "Stores the latest score and replicates it to the lane's peer replicas."
-  @spec write(Lane.id(), Matches.match_id(), Match.score()) :: :ok
-  def write(lane, id, score), do: GenServer.call(Lane.db(lane), {:write, id, score})
+  @spec write(Lane.id(), Matches.match_id(), Match.score()) :: :ok | :error
+  def write(lane, id, score), do: safe_call(lane, {:write, id, score}, :error)
 
   @doc "All stored scores for `lane`, keyed by match id, from the local replica."
   @spec all(Lane.id()) :: %{Matches.match_id() => Match.score()}
-  def all(lane), do: GenServer.call(Lane.db(lane), :all)
+  def all(lane), do: safe_call(lane, :all, %{})
+
+  # The lane's replica can be briefly absent - a just-joined node, or one
+  # shutting down mid Horde redistribution. Callers (a restarting match) must
+  # not crash on that; they get the fallback and retry.
+  defp safe_call(lane, request, fallback) do
+    GenServer.call(Lane.db(lane), request)
+  catch
+    :exit, _reason -> fallback
+  end
 
   @impl GenServer
   def init(lane) do

@@ -5,6 +5,7 @@ defmodule ScoreBoard.BoardTest do
 
   import ScoreBoard.TestHelpers
 
+  alias ScoreBoard.Blip
   alias ScoreBoard.Board
   alias ScoreBoard.DB
   alias ScoreBoard.Lane
@@ -134,5 +135,24 @@ defmodule ScoreBoard.BoardTest do
 
   test "fetch_score/2 returns :error for unknown ids", %{lane: lane, id: id} do
     assert :error = Board.fetch_score(lane, id)
+  end
+
+  test "a blipped board freezes and catches up on reload", %{lane: lane, id: id} do
+    broadcast(lane, {:match_created, id, %{home: 0, away: 0}, self()})
+    sync(lane)
+    assert {:ok, %{home: 0, away: 0}} = Board.fetch_score(lane, id)
+
+    # Offline: the truth advances in the DB, but events are dropped.
+    Blip.on(lane)
+    on_exit(fn -> Blip.off(lane) end)
+    :ok = DB.write(lane, id, %{home: 3, away: 0})
+    broadcast(lane, {:goal, id, :home})
+    sync(lane)
+    assert {:ok, %{home: 0, away: 0}} = Board.fetch_score(lane, id)
+
+    # Back online: reload catches the board up to the truth.
+    Blip.off(lane)
+    assert :ok = Board.reload(lane)
+    assert {:ok, %{home: 3, away: 0}} = Board.fetch_score(lane, id)
   end
 end

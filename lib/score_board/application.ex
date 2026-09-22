@@ -22,12 +22,14 @@ defmodule ScoreBoard.Application do
       # under the lane pool instead.
       {Phoenix.PubSub, name: ScoreBoard.PubSub},
       {Horde.Registry, name: ScoreBoard.MatchRegistry, keys: :unique, members: :auto},
-      {Horde.DynamicSupervisor,
-       name: ScoreBoard.MatchSupervisor,
-       strategy: :one_for_one,
-       members: :auto,
-       distribution_strategy: ScoreBoard.RoundRobinDistribution,
-       process_redistribution: :active},
+      {
+        Horde.DynamicSupervisor,
+        name: ScoreBoard.MatchSupervisor,
+        strategy: :one_for_one,
+        members: :auto,
+        distribution_strategy: ScoreBoard.RoundRobinDistribution,
+        process_redistribution: :active
+      },
       # Blocks 500ms so Horde's registries sync the existing cluster before boot.
       {ScoreBoard.BootBarrier, 500},
       # The tenant lane pool: per lane, an isolated event bus + DB replica +

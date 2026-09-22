@@ -2,14 +2,23 @@ defmodule ScoreBoard.LanesTest do
   # Shares the app-wide lane pool, so it runs serially and releases what it takes.
   use ExUnit.Case, async: false
 
+  import ScoreBoard.TestHelpers
+
   alias ScoreBoard.Blip
   alias ScoreBoard.Lane
   alias ScoreBoard.Lanes
+  alias ScoreBoard.Matches
 
   setup %{test: test} do
     tenant = Atom.to_string(test)
     on_exit(fn -> Lanes.release(tenant) end)
     {:ok, tenant: tenant}
+  end
+
+  test "assigning a lane seeds one market per node", %{tenant: tenant} do
+    {:ok, lane} = Lanes.assign(tenant)
+
+    assert_eventually(fn -> assert Matches.list_matches(lane) != [] end)
   end
 
   test "assigns a lane and resolves it back", %{tenant: tenant} do
