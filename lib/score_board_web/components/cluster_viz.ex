@@ -367,19 +367,35 @@ defmodule ScoreBoardWeb.ClusterViz do
     end
   end
 
-  # How many messages this node is missing. Each peer only buffers what it
-  # produced itself, so the backlogs are disjoint and the node is behind by
-  # their sum. Expiry is still per sender: one peer overrunning its ring
-  # buffer is enough for the node to reload instead of replaying.
-  defp missing(cluster, receiver) do
-    backlogs =
+  # How many messages a node is out of sync by, counting both directions so an
+  # offline node shows a box no matter which match was scored:
+  #
+  #   * inbound - what each peer buffered *toward* this node (it hasn't received);
+  #     peers buffer disjoint sets, so this is their sum;
+  #   * outbound - what this node buffered *toward* its peers (it hasn't sent);
+  #     the same messages go to every peer, so this is the max, not the sum.
+  #
+  # Expiry is per backlog: one crossing the ring buffer means reload, not replay.
+  defp missing(cluster, node) do
+    inbound =
       cluster
-      |> Map.delete(receiver)
+      |> Map.delete(node)
       |> Map.values()
       |> Enum.map(fn
-        %{pending: pending, capacity: capacity} -> {Map.get(pending, receiver, 0), capacity}
+        %{pending: pending, capacity: capacity} -> {Map.get(pending, node, 0), capacity}
         _unreachable -> {0, nil}
       end)
+
+    outbound =
+      case cluster[node] do
+        %{pending: pending, capacity: capacity} ->
+          [{pending |> Map.values() |> Enum.max(fn -> 0 end), capacity}]
+
+        _ ->
+          [{0, nil}]
+      end
+
+    backlogs = inbound ++ outbound
 
     total = backlogs |> Enum.map(fn {count, _capacity} -> count end) |> Enum.sum()
     expired? = Enum.any?(backlogs, fn {c, cap} -> cap != nil and c >= cap end)

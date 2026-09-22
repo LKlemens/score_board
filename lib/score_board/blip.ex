@@ -20,13 +20,13 @@ defmodule ScoreBoard.Blip do
 
   @doc "Starts rejecting this lane's incoming and outgoing batches on this node."
   @spec on(Lane.id()) :: :ok
-  def on(lane), do: FaultInjection.put(Lane.pubsub(lane), :error)
+  def on(lane), do: FaultInjection.put(Lane.group(lane), :error)
 
   @doc "Ends the lane's blip; buffered batches replay in order."
   @spec off(Lane.id()) :: :ok
-  def off(lane), do: FaultInjection.put(Lane.pubsub(lane), :ok)
+  def off(lane), do: FaultInjection.put(Lane.group(lane), :ok)
 
   @doc "Whether this lane is currently partitioned on this node."
   @spec enabled?(Lane.id()) :: boolean()
-  def enabled?(lane), do: not FaultInjection.ok?(Lane.pubsub(lane))
+  def enabled?(lane), do: not FaultInjection.ok?(Lane.group(lane))
 end

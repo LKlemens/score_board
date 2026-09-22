@@ -176,19 +176,12 @@ defmodule ScoreBoardWeb.ScoreLive do
   end
 
   defp toggle_blip(lane, target) when target == node() do
-    if Blip.enabled?(lane) do
-      Blip.off(lane)
-      # Coming back online: catch the frozen board up to the truth at once.
-      Board.reload(lane)
-    else
-      Blip.on(lane)
-    end
+    if Blip.enabled?(lane), do: Blip.off(lane), else: Blip.on(lane)
   end
 
   defp toggle_blip(lane, target) do
     if :erpc.call(target, Blip, :enabled?, [lane], @remote_timeout) do
       :erpc.call(target, Blip, :off, [lane], @remote_timeout)
-      :erpc.call(target, Board, :reload, [lane], @remote_timeout)
     else
       :erpc.call(target, Blip, :on, [lane], @remote_timeout)
     end

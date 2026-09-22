@@ -125,6 +125,14 @@ defmodule ScoreBoardWeb.ClusterVizTest do
 
       assert html =~ "missing_msg: 25, capacity: overflow"
     end
+
+    test "an offline node counts its own stuck outbound backlog" do
+      # b is offline and has buffered 5 of its own messages toward a; the box
+      # shows on b even though no peer buffered anything toward it.
+      html = render_viz(%{a: up(b: 0), b: blipped(a: 5)})
+
+      assert html =~ "missing_msg: 5, max_capacity: 20"
+    end
   end
 
   defp render_viz(cluster) do

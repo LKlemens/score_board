@@ -15,7 +15,6 @@ defmodule ScoreBoard.Board do
 
   require Logger
 
-  alias ScoreBoard.Blip
   alias ScoreBoard.DB
   alias ScoreBoard.EchoPubSub
   alias ScoreBoard.Lane
@@ -107,12 +106,12 @@ defmodule ScoreBoard.Board do
 
   @impl GenServer
   def handle_info({:match_created, id, score, pid}, state) do
-    {:noreply, ingest(state, fn s -> apply_created(id, score, pid, s) end)}
+    {:noreply, apply_created(id, score, pid, state)}
   end
 
   @impl GenServer
   def handle_info({:goal, id, team}, state) do
-    {:noreply, ingest(state, fn s -> apply_goal(id, team, s) end)}
+    {:noreply, apply_goal(id, team, state)}
   end
 
   @impl GenServer
@@ -144,13 +143,6 @@ defmodule ScoreBoard.Board do
         notify(state, {:match_removed, id})
         {:noreply, %{state | by_ref: by_ref, by_id: Map.delete(state.by_id, id)}}
     end
-  end
-
-  # Local delivery bypasses echo's fault gate, so a blipped node would still see
-  # events. Gate here too: while offline the board freezes (drops events).
-  # Recovery is the explicit `reload/1` that going back online triggers.
-  defp ingest(state, apply_fun) do
-    if Blip.enabled?(state.lane), do: state, else: apply_fun.(state)
   end
 
   # Overwrite, not insert_new: a restarted or moved match re-announces itself

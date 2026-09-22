@@ -23,13 +23,21 @@ defmodule ScoreBoard.Lane do
   @spec buffer_size() :: pos_integer()
   def buffer_size, do: Application.get_env(:score_board, :lane_buffer_size, 20)
 
-  @doc "This lane's EchoPubSub instance name, which is also its pubsub group."
+  @doc "This lane's EchoPubSub instance name."
   @spec pubsub(id()) :: module()
   def pubsub(id), do: Module.concat(__MODULE__, "P#{id}")
 
-  @doc "This lane's echo producer, derived from the group like the adapter does."
+  @doc """
+  This lane's echo pg group - what the producer/worker deliver on and what
+  fault injection keys off. Phoenix.PubSub names the adapter `<pubsub>.Adapter`,
+  and with `pool_size: 1` the group is that adapter name.
+  """
+  @spec group(id()) :: module()
+  def group(id), do: Module.concat(pubsub(id), Adapter)
+
+  @doc "This lane's echo producer, `<group>.Producer`."
   @spec producer(id()) :: module()
-  def producer(id), do: Module.concat(pubsub(id), Producer)
+  def producer(id), do: Module.concat(group(id), Producer)
 
   @doc "This lane's DB replica name (used from Phase 3 on)."
   @spec db(id()) :: module()

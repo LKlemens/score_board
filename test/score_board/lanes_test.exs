@@ -5,6 +5,7 @@ defmodule ScoreBoard.LanesTest do
   import ScoreBoard.TestHelpers
 
   alias ScoreBoard.Blip
+  alias ScoreBoard.Cluster
   alias ScoreBoard.Lane
   alias ScoreBoard.Lanes
   alias ScoreBoard.Matches
@@ -13,6 +14,11 @@ defmodule ScoreBoard.LanesTest do
     tenant = Atom.to_string(test)
     on_exit(fn -> Lanes.release(tenant) end)
     {:ok, tenant: tenant}
+  end
+
+  test "a lane's snapshot finds its producer (capacity is set)" do
+    assert %{capacity: capacity} = Cluster.snapshot(hd(Lane.ids()))
+    assert is_integer(capacity)
   end
 
   test "assigning a lane seeds one market per node", %{tenant: tenant} do
