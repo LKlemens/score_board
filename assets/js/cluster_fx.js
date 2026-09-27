@@ -8,7 +8,8 @@
 // ring buffer) is a convoy of dots travelling together down the link (see
 // syncStream); a "reload" (the sender overran its buffer, so the receiver's
 // cursor expired) is rings collapsing into the receiving node - no convoy,
-// because nothing was replayed in order.
+// because nothing was replayed in order. Both carry a short label saying what
+// the motion means, so the animation is not the only explanation.
 //
 // All read the link geometry straight out of the rendered SVG and draw
 // into the #cluster-fx group, which LiveView is told to ignore so a
@@ -26,6 +27,9 @@ const BATCH_MS = 760
 const BATCH_MAX = 12
 const BATCH_SPREAD = 20
 const DRAIN_MS = 700
+const STORY_MS = 1500
+const STORY_CHAR = 6.1
+const VIEW_WIDTH = 720
 
 export const ClusterFx = {
   mounted() {
@@ -55,7 +59,6 @@ export const ClusterFx = {
   // node. Each reloaded node is drawn once even when several peers overran it.
   flush({streams}) {
     const reloaded = new Set()
-    const drained = new Set()
 
     ;(streams || []).forEach(({from, to, count, mode}) => {
       if (mode === "reload") {
@@ -64,12 +67,8 @@ export const ClusterFx = {
           this.reloadNode(to)
         }
       } else {
-        // The buffering node's box empties as its convoy leaves; draw the drain
-        // once even if it flushes to several peers.
-        if (!drained.has(from)) {
-          drained.add(from)
-          this.drainBox(from)
-        }
+        // Each peer has its own box, so the one that held this backlog drains.
+        this.drainBox(from, to)
         this.syncStream(from, to, count)
       }
     })
@@ -78,8 +77,10 @@ export const ClusterFx = {
   // The count box popping and fading as the backlog it held drains out. Cloned
   // into the ignored overlay so LiveView's next poll (which removes the real
   // box) cannot cut the animation short.
-  drainBox(node) {
-    const box = this.el.querySelector(`[data-missing-box="${node}"]`)
+  drainBox(node, peer) {
+    const box = this.el.querySelector(
+      `[data-missing-box="${node}"][data-missing-peer="${peer}"]`
+    )
     const fx = this.overlay()
     if (!box || !fx) return
 
@@ -104,6 +105,9 @@ export const ClusterFx = {
     if (!link || !fx || link.path.dataset.healthy !== "true") return
 
     const total = link.path.getTotalLength()
+    const middle = link.path.getPointAtLength(total / 2)
+    this.storyLabel(middle.x, middle.y - 20, "all buffered msgs sent as one package", BATCH_MS)
+
     const n = Math.max(2, Math.min(count, BATCH_MAX))
     const group = document.createElementNS(SVG_NS, "g")
     group.setAttribute("class", "fx-comet fx-sync")
@@ -156,6 +160,13 @@ export const ClusterFx = {
     const fx = this.overlay()
     if (!dot || !fx) return
 
+    this.storyLabel(
+      Number(dot.getAttribute("cx")),
+      Number(dot.getAttribute("cy")) - 36,
+      "cursor expired - fetching data from DB",
+      RELOAD_MS
+    )
+
     for (let index = 0; index < RELOAD_RINGS; index++) {
       const ring = document.createElementNS(SVG_NS, "circle")
       ring.setAttribute("class", "fx-reload")
@@ -172,6 +183,44 @@ export const ClusterFx = {
         ring.remove()
       }, RELOAD_MS + index * RELOAD_GAP_MS)
     }
+  },
+
+  // A short caption in the overlay saying what the animation next to it means.
+  // It lives as long as that animation plus a beat to read it, and is nudged
+  // back inside the viewBox so a label on an edge node stays readable.
+  storyLabel(x, y, text, ms) {
+    const fx = this.overlay()
+    if (!fx) return
+
+    const width = text.length * STORY_CHAR + 18
+    const half = width / 2
+    const cx = Math.min(Math.max(x, half + 4), VIEW_WIDTH - half - 4)
+
+    const group = document.createElementNS(SVG_NS, "g")
+    group.setAttribute("class", "fx-story")
+
+    const box = document.createElementNS(SVG_NS, "rect")
+    box.setAttribute("x", String(cx - half))
+    box.setAttribute("y", String(y - 11))
+    box.setAttribute("width", String(width))
+    box.setAttribute("height", "22")
+    box.setAttribute("rx", "11")
+
+    const label = document.createElementNS(SVG_NS, "text")
+    label.setAttribute("x", String(cx))
+    label.setAttribute("y", String(y + 4))
+    label.setAttribute("text-anchor", "middle")
+    label.textContent = text
+
+    group.appendChild(box)
+    group.appendChild(label)
+    fx.appendChild(group)
+    this.drawn.add(group)
+
+    setTimeout(() => {
+      this.drawn.delete(group)
+      group.remove()
+    }, ms + STORY_MS)
   },
 
   // The graph draws one path per unordered pair, so a hop may have to be

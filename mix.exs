@@ -72,8 +72,7 @@ defmodule ScoreBoard.MixProject do
       {:dns_cluster, "~> 0.2.0"},
       {:libcluster, "~> 3.4"},
       {:horde, "~> 0.10"},
-      {:echo_pubsub,
-       github: "LKlemens/echo_pubsub", branch: "per_group_isolation"},
+      {:echo_pubsub, github: "LKlemens/echo_pubsub", branch: "per_group_isolation"},
       {:bandit, "~> 1.5"}
     ]
   end

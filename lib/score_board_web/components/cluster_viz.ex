@@ -5,9 +5,13 @@ defmodule ScoreBoardWeb.ClusterViz do
   Nodes are laid out as a regular polygon (triangle for 3, square for 4,
   and so on; one or two nodes sit on a horizontal line). Healthy links
   carry faint traveling message dots; a link to a blipped or unreachable
-  node turns red. The box beside a lagging node counts the messages it is
-  missing - queued at its peers, flushed once the connection is back; red
-  once past the ring buffer, when the node will reload instead of replay.
+  node turns red. Beside a node sits one box per peer it is buffering for,
+  counting the messages that peer is missing - flushed once the connection
+  is back; red once past the ring buffer, when the peer will reload instead
+  of replay. Two lagging peers means two boxes.
+
+  Whatever the picture is currently showing is also spelled out in words
+  underneath it, one story card per offline node and per buffer.
 
   A scored goal is drawn on top of this ambient traffic by the `ClusterFx`
   JavaScript hook: it reads the link geometry out of this SVG and flies a
@@ -26,6 +30,9 @@ defmodule ScoreBoardWeb.ClusterViz do
   # How far a link bows away from the middle of the graph.
   @bow 24
 
+  # Vertical distance between two backlog boxes stacked beside one node.
+  @box_gap 28
+
   attr :nodes, :list, required: true, doc: "sorted cluster nodes"
   attr :cluster, :map, required: true, doc: "node => Cluster.snapshot() | :unreachable"
   attr :node, :atom, required: true, doc: "the node serving this page"
@@ -38,6 +45,8 @@ defmodule ScoreBoardWeb.ClusterViz do
       |> assign(:height, svg_height(length(assigns.nodes)))
       |> assign(:links, links(assigns.nodes, positions, assigns.cluster))
       |> assign(:circles, circles(assigns.nodes, positions, assigns.cluster, assigns.node))
+
+    assigns = assign(assigns, :stories, stories(assigns.circles))
 
     ~H"""
     <svg
@@ -109,38 +118,40 @@ defmodule ScoreBoardWeb.ClusterViz do
           stroke-opacity="0.7"
           data-node-dot={circle.node}
         />
-        <g :if={circle.missing > 0}>
+        <g :for={box <- circle.boxes}>
           <rect
-            x={circle.badge_x}
-            y={circle.y - 12}
+            x={box.x}
+            y={box.y - 12}
             width="38"
             height="24"
             rx="8"
-            class={circle.missing_class}
+            class={box.class}
             data-missing-box={circle.node}
+            data-missing-peer={box.peer}
           />
           <text
-            x={circle.badge_x + 19}
-            y={circle.y + 4}
+            x={box.x + 19}
+            y={box.y + 4}
             text-anchor="middle"
             class="fill-base-100 text-[12px] font-bold"
           >
-            {circle.missing}
+            {box.count}
           </text>
           <g class="cursor-help">
             <title>
-              {if circle.overflow?,
-                do: "missing_msg: #{circle.missing}, capacity: overflow",
-                else: "missing_msg: #{circle.missing}, max_capacity: #{circle.capacity || "?"}"} —
-              Orange: queued at its peers (up to the max capacity of {circle.capacity || "?"})
-              and replayed in order once the connection is back.
-              Red: past capacity - the node receives cursor_expired and reloads
+              {if box.overflow?,
+                do: "missing_msg: #{box.count} to #{box.peer_label}, capacity: overflow",
+                else:
+                  "missing_msg: #{box.count} to #{box.peer_label}, max_capacity: #{box.capacity || "?"}"} —
+              Orange: queued here for {box.peer_label} (up to the max capacity of {box.capacity ||
+                "?"}) and replayed in order once the connection is back.
+              Red: past capacity - {box.peer_label} receives cursor_expired and reloads
               from the match processes instead.
             </title>
-            <circle cx={circle.info_x} cy={circle.y} r="9" class="fill-info opacity-80" />
+            <circle cx={box.info_x} cy={box.y} r="9" class="fill-info opacity-80" />
             <text
-              x={circle.info_x}
-              y={circle.y + 4}
+              x={box.info_x}
+              y={box.y + 4}
               text-anchor="middle"
               class="fill-base-100 text-[11px] font-bold italic"
             >
@@ -194,10 +205,19 @@ defmodule ScoreBoardWeb.ClusterViz do
     <p class="text-center text-xs opacity-60 -mt-2">
       faint dots = ambient traffic &nbsp;•&nbsp; bright comet = a single goal
       leaving the node its match lives on &nbsp;•&nbsp; convoy = a node back
-      online syncing its buffered backlog &nbsp;•&nbsp; box next to a node =
-      messages it is buffering for an offline peer &nbsp;•&nbsp; red box = past
-      the buffer, the peer will reload instead of replay
+      online syncing its buffered backlog
     </p>
+    <div :if={@stories != []} class="max-w-3xl mx-auto mt-3 grid gap-2 sm:grid-cols-2">
+      <div
+        :for={story <- @stories}
+        class={["rounded-box bg-base-200/60 px-3 py-2 border-l-4", story.border]}
+        data-story={story.kind}
+        data-story-node={story.node}
+      >
+        <p class="text-xs font-semibold font-mono">{story.title}</p>
+        <p class="text-xs opacity-70 leading-snug">{story.text}</p>
+      </div>
+    </div>
     """
   end
 
@@ -342,7 +362,6 @@ defmodule ScoreBoardWeb.ClusterViz do
           true -> "success"
         end
 
-      {missing, expired?, capacity} = missing(cluster, viz_node)
       label = short_name(viz_node) <> if viz_node == self_node, do: " (this)", else: ""
       reachable? = status != :unreachable
       offline? = reachable? and status.blip
@@ -356,33 +375,94 @@ defmodule ScoreBoardWeb.ClusterViz do
         label: label,
         label_width: round(String.length(label) * 7.3) + 14,
         node: Atom.to_string(viz_node),
+        short_name: short_name(viz_node),
         reachable?: reachable?,
         offline?: offline?,
-        missing: min(missing, 999),
-        capacity: capacity,
-        overflow?: expired?,
-        missing_class: if(expired?, do: "fill-error", else: "fill-warning"),
-        badge_x: if(x < @center_x, do: x - 64, else: x + 26),
-        info_x: if(x < @center_x, do: x - 76, else: x + 76)
+        boxes: boxes(buffers(cluster, viz_node), x, y)
       }
     end
   end
 
-  # How many messages this node is buffering for its peers - its own producer's
-  # backlog of undelivered sends. The box sits on the node holding the buffer
-  # (the sender whose peer is offline, or an offline node buffering its own
-  # sends), not on the peer that is merely behind. The same messages go to
-  # every lagging peer, so it is the max across them, not the sum. Overflow
-  # (past the ring buffer) means the lagging peer will reload instead of replay.
-  defp missing(cluster, node) do
+  # One entry per peer this node is buffering for - its own producer's backlog
+  # of sends that peer has not read yet. The boxes sit on the node holding the
+  # buffer (the sender whose peer is offline, or an offline node buffering its
+  # own sends), not on the peer that is merely behind, so a node buffering for
+  # two offline peers draws two boxes. Overflow (past the ring buffer) means
+  # that peer will reload instead of replay.
+  defp buffers(cluster, node) do
     case cluster[node] do
       %{pending: pending, capacity: capacity} ->
-        buffered = pending |> Map.values() |> Enum.max(fn -> 0 end)
-        {buffered, capacity != nil and buffered >= capacity, capacity}
+        for {peer, count} <- Enum.sort(pending), count > 0 do
+          %{
+            peer: Atom.to_string(peer),
+            peer_label: short_name(peer),
+            count: min(count, 999),
+            capacity: capacity,
+            overflow?: capacity != nil and count >= capacity
+          }
+        end
 
       _unreachable ->
-        {0, false, nil}
+        []
     end
+  end
+
+  # The boxes are stacked vertically on the outward side of the node and
+  # centred on it, so one box keeps the position it always had.
+  defp boxes(buffers, x, y) do
+    top = y - (length(buffers) - 1) * @box_gap / 2
+
+    for {buffer, index} <- Enum.with_index(buffers) do
+      Map.merge(buffer, %{
+        x: if(x < @center_x, do: x - 64, else: x + 26),
+        y: round(top + index * @box_gap),
+        info_x: if(x < @center_x, do: x - 76, else: x + 76),
+        class: if(buffer.overflow?, do: "fill-error", else: "fill-warning")
+      })
+    end
+  end
+
+  # The picture in words: one card per offline node and per buffer it holds,
+  # so what the colours mean is on the page instead of behind a tooltip.
+  defp stories(circles) do
+    offline =
+      for circle <- circles, circle.offline? do
+        %{
+          kind: "offline",
+          node: circle.node,
+          border: "border-error",
+          title: "#{circle.short_name} is offline",
+          text:
+            "The node is offline - a temporary network partition, say. Its links are red " <>
+              "and no events cross them until it is back."
+        }
+      end
+
+    buffered =
+      for circle <- circles, box <- circle.boxes do
+        %{
+          kind: if(box.overflow?, do: "overflow", else: "buffered"),
+          node: circle.node,
+          border: if(box.overflow?, do: "border-error", else: "border-warning"),
+          title:
+            if(box.overflow?,
+              do: "#{circle.short_name} → #{box.peer_label}: buffer overflowed (#{box.count})",
+              else: "#{circle.short_name} → #{box.peer_label}: #{box.count} msgs buffered"
+            ),
+          text:
+            if(box.overflow?,
+              do:
+                "The buffer is full (capacity #{box.capacity || "?"}), so the oldest messages " <>
+                  "are already gone. On sync #{box.peer_label} gets cursor_expired instead of a " <>
+                  "replay and reloads its data from the DB.",
+              else:
+                "#{box.count} messages are buffered here, waiting for #{box.peer_label} to be " <>
+                  "back - then the missing messages are sent to it in order."
+            )
+        }
+      end
+
+    offline ++ buffered
   end
 
   defp links(nodes, positions, cluster) do

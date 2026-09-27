@@ -117,13 +117,13 @@ defmodule ScoreBoardWeb.ClusterVizTest do
     test "the tooltip shows the missing count against the max capacity" do
       html = render_viz(%{a: up(b: 6), b: blipped(a: 0)})
 
-      assert html =~ "missing_msg: 6, max_capacity: 20"
+      assert html =~ "missing_msg: 6 to b, max_capacity: 20"
     end
 
     test "past the buffer the tooltip reads overflow" do
       html = render_viz(%{a: up(b: 25), b: blipped(a: 0)})
 
-      assert html =~ "missing_msg: 25, capacity: overflow"
+      assert html =~ "missing_msg: 25 to b, capacity: overflow"
     end
 
     test "an offline node counts its own stuck outbound backlog" do
@@ -131,7 +131,73 @@ defmodule ScoreBoardWeb.ClusterVizTest do
       # shows on b even though no peer buffered anything toward it.
       html = render_viz(%{a: up(b: 0), b: blipped(a: 5)})
 
-      assert html =~ "missing_msg: 5, max_capacity: 20"
+      assert html =~ "missing_msg: 5 to a, max_capacity: 20"
+    end
+
+    test "buffering for two offline peers draws one box per peer" do
+      html = render_viz(%{a: up(b: 8, c: 25), b: blipped(a: 0), c: blipped(a: 0)})
+
+      assert html =~ ~s(data-missing-box="a" data-missing-peer="b")
+      assert html =~ ~s(data-missing-box="a" data-missing-peer="c")
+      assert html =~ "missing_msg: 8 to b, max_capacity: 20"
+      assert html =~ "missing_msg: 25 to c, capacity: overflow"
+    end
+
+    test "the two boxes of one node do not sit on top of each other" do
+      html = render_viz(%{a: up(b: 8, c: 9), b: blipped(a: 0), c: blipped(a: 0)})
+
+      boxes = Regex.scan(~r/<rect x="[^"]*" y="([^"]*)"[^>]*data-missing-box="a"/, html)
+
+      assert length(boxes) == 2
+      assert [y1, y2] = Enum.map(boxes, fn [_, y] -> String.to_integer(y) end)
+      assert abs(y2 - y1) >= 24
+    end
+
+    test "a peer with nothing buffered for it gets no box" do
+      html = render_viz(%{a: up(b: 0, c: 4), b: up(a: 0), c: blipped(a: 0)})
+
+      refute html =~ ~s(data-missing-peer="b")
+      assert html =~ ~s(data-missing-peer="c")
+    end
+  end
+
+  describe "cluster_viz/1 story cards" do
+    test "an offline node is explained as a partition" do
+      html = render_viz(%{a: up(b: 0), b: blipped(a: 0)})
+
+      assert html =~ ~s(data-story="offline" data-story-node="b")
+      assert html =~ "b is offline"
+      assert html =~ "temporary network partition"
+    end
+
+    test "a buffer under capacity explains the wait and the replay" do
+      html = render_viz(%{a: up(b: 8), b: blipped(a: 0)})
+
+      assert html =~ ~s(data-story="buffered" data-story-node="a")
+      assert html =~ "8 msgs buffered"
+      assert html =~ "waiting for b to be back"
+    end
+
+    test "a buffer past capacity explains cursor_expired and the DB reload" do
+      html = render_viz(%{a: up(b: 25), b: blipped(a: 0)})
+
+      assert html =~ ~s(data-story="overflow" data-story-node="a")
+      assert html =~ "buffer overflowed (25)"
+      assert html =~ "cursor_expired"
+      assert html =~ "reloads its data from the DB"
+    end
+
+    test "two buffers get a card each" do
+      html = render_viz(%{a: up(b: 8, c: 25), b: blipped(a: 0), c: blipped(a: 0)})
+
+      assert html =~ "8 msgs buffered"
+      assert html =~ "buffer overflowed (25)"
+    end
+
+    test "a healthy cluster tells no story" do
+      html = render_viz(%{a: up(b: 0), b: up(a: 0)})
+
+      refute html =~ "data-story="
     end
   end
 

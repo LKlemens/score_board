@@ -217,3 +217,36 @@
   transform-origin: center;
   animation: fx-drain 0.7s ease-out forwards;
 }
+
+/* Animation captions: a short label beside a convoy or a reload saying what
+   the motion means. Fades in with the animation and out after a beat. */
+@keyframes fx-story {
+  0% {
+    opacity: 0;
+  }
+  12% {
+    opacity: 1;
+  }
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.fx-story {
+  animation: fx-story 2.2s ease-in-out forwards;
+}
+
+.fx-story rect {
+  fill: var(--color-base-300);
+  stroke: var(--color-base-content);
+  stroke-opacity: 0.15;
+}
+
+.fx-story text {
+  fill: var(--color-base-content);
+  font-size: 11px;
+  font-weight: 600;
+}
