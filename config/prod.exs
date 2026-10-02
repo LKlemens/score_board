@@ -20,6 +20,18 @@ config :score_board, ScoreBoardWeb.Endpoint,
     ]
   ]
 
+# epmd is loopback-only here, so LocalEpmd's hostname lookup fails - dial the
+# fixed nodes instead. `timeout` retries while the boards boot.
+# Keep in step with rel/overlays/bin/cluster_start.sh.
+config :score_board, :topologies,
+  local: [
+    strategy: Cluster.Strategy.Epmd,
+    config: [
+      hosts: [:"board1@127.0.0.1", :"board2@127.0.0.1", :"board3@127.0.0.1"],
+      timeout: 5_000
+    ]
+  ]
+
 # Configure Swoosh API Client
 config :swoosh, api_client: Swoosh.ApiClient.Req
 

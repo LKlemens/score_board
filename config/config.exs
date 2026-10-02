@@ -67,6 +67,9 @@ config :tailwind,
     env: %{"NODE_PATH" => [Path.expand("../deps", __DIR__), Mix.Project.build_path()]}
   ]
 
+# Node discovery; prod overrides it.
+config :score_board, :topologies, local: [strategy: Cluster.Strategy.LocalEpmd]
+
 # Configure Elixir's Logger
 config :logger, :default_formatter,
   format: "$time $metadata[$level] $message\n",

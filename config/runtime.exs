@@ -16,7 +16,8 @@ import Config
 #
 # Alternatively, you can use `mix phx.gen.release` to generate a `bin/server`
 # script that automatically sets the env var above.
-if System.get_env("PHX_SERVER") do
+# An empty PHX_SERVER is truthy, and the headless boards must not serve.
+if System.get_env("PHX_SERVER") in ["1", "true"] do
   config :score_board, ScoreBoardWeb.Endpoint, server: true
 end
 

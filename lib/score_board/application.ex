@@ -10,8 +10,8 @@ defmodule ScoreBoard.Application do
     # Reap dead nodes in ~5s instead of the ~60s default so stale columns clear.
     :net_kernel.set_net_ticktime(5)
 
-    # LocalEpmd discovers every node registered with the local epmd daemon
-    topologies = [local: [strategy: Cluster.Strategy.LocalEpmd]]
+    # epmd listing in dev/test, fixed hosts in prod.
+    topologies = Application.fetch_env!(:score_board, :topologies)
 
     children = [
       ScoreBoardWeb.Telemetry,
