@@ -106,6 +106,48 @@ defmodule ScoreBoardWeb.ClusterVizTest do
     end
   end
 
+  describe "sustained/3" do
+    test "a fresh backlog is not drawn yet, only remembered" do
+      {drawn, since} = ClusterViz.sustained(%{a: up(b: 4)}, %{}, 0)
+
+      assert Enum.empty?(drawn)
+      assert since == %{{:a, :b} => 0}
+    end
+
+    test "a backlog held past the hold time is drawn" do
+      {drawn, since} = ClusterViz.sustained(%{a: up(b: 4)}, %{{:a, :b} => 0}, 1_500)
+
+      assert Enum.to_list(drawn) == [{:a, :b}]
+      assert since == %{{:a, :b} => 0}
+    end
+
+    test "each peer is timed on its own" do
+      since = %{{:a, :b} => 0}
+      {drawn, since} = ClusterViz.sustained(%{a: up(b: 4, c: 2)}, since, 1_200)
+
+      assert Enum.to_list(drawn) == [{:a, :b}]
+      assert since == %{{:a, :b} => 0, {:a, :c} => 1_200}
+    end
+
+    test "a backlog that drained starts its clock over" do
+      {_drawn, since} = ClusterViz.sustained(%{a: up(b: 0)}, %{{:a, :b} => 0}, 5_000)
+
+      assert since == %{}
+
+      {drawn, since} = ClusterViz.sustained(%{a: up(b: 3)}, since, 5_100)
+
+      assert Enum.empty?(drawn)
+      assert since == %{{:a, :b} => 5_100}
+    end
+
+    test "an unreachable node has no backlog to time" do
+      {drawn, since} = ClusterViz.sustained(%{a: :unreachable}, %{}, 9_000)
+
+      assert Enum.empty?(drawn)
+      assert since == %{}
+    end
+  end
+
   describe "cluster_viz/1 rendering" do
     test "offline and online toggles use distinct colours" do
       html = render_viz(%{a: up(b: 6), b: blipped(a: 0)})
@@ -159,6 +201,22 @@ defmodule ScoreBoardWeb.ClusterVizTest do
       refute html =~ ~s(data-missing-peer="b")
       assert html =~ ~s(data-missing-peer="c")
     end
+
+    test "only buffers held long enough are drawn" do
+      cluster = %{a: up(b: 8, c: 3), b: blipped(a: 0), c: up(a: 0)}
+      html = render_viz(cluster, MapSet.new([{:a, :b}]))
+
+      assert html =~ ~s(data-missing-peer="b")
+      refute html =~ ~s(data-missing-peer="c")
+    end
+
+    test "a momentary backlog draws neither box nor card" do
+      html = render_viz(%{a: up(b: 1), b: up(a: 0)}, MapSet.new())
+
+      refute html =~ "data-missing-peer="
+      refute html =~ "data-story="
+      assert html =~ "data-story-empty"
+    end
   end
 
   describe "cluster_viz/1 story cards" do
@@ -175,7 +233,7 @@ defmodule ScoreBoardWeb.ClusterVizTest do
 
       assert html =~ ~s(data-story="buffered" data-story-node="a")
       assert html =~ "8 msgs buffered"
-      assert html =~ "waiting for b to be back"
+      assert html =~ "Waiting for b to be back"
     end
 
     test "a buffer past capacity explains cursor_expired and the DB reload" do
@@ -201,9 +259,15 @@ defmodule ScoreBoardWeb.ClusterVizTest do
     end
   end
 
-  defp render_viz(cluster) do
+  defp render_viz(cluster, sustained \\ :all) do
     nodes = cluster |> Map.keys() |> Enum.sort()
-    render_component(&ClusterViz.cluster_viz/1, nodes: nodes, cluster: cluster, node: hd(nodes))
+
+    render_component(&ClusterViz.cluster_viz/1,
+      nodes: nodes,
+      cluster: cluster,
+      node: hd(nodes),
+      sustained: sustained
+    )
   end
 
   defp up(pending), do: %{@up | pending: Map.new(pending)}

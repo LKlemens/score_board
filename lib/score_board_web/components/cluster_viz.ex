@@ -10,8 +10,13 @@ defmodule ScoreBoardWeb.ClusterViz do
   is back; red once past the ring buffer, when the peer will reload instead
   of replay. Two lagging peers means two boxes.
 
+  A buffer only gets a box once it has been held for a while
+  (`sustained`), so the single message in flight between two healthy nodes
+  never draws one.
+
   Whatever the picture is currently showing is also spelled out in words
-  underneath it, one story card per offline node and per buffer.
+  underneath it, one story card per offline node and per buffer. That strip
+  has a fixed height so cards appearing cannot push the scoreboard down.
 
   A scored goal is drawn on top of this ambient traffic by the `ClusterFx`
   JavaScript hook: it reads the link geometry out of this SVG and flies a
@@ -33,9 +38,16 @@ defmodule ScoreBoardWeb.ClusterViz do
   # Vertical distance between two backlog boxes stacked beside one node.
   @box_gap 28
 
+  # How long a backlog has to sit unread before it is worth a box.
+  @hold_ms 1000
+
   attr :nodes, :list, required: true, doc: "sorted cluster nodes"
   attr :cluster, :map, required: true, doc: "node => Cluster.snapshot() | :unreachable"
   attr :node, :atom, required: true, doc: "the node serving this page"
+
+  attr :sustained, :any,
+    default: :all,
+    doc: "MapSet of {holder, peer} buffers held long enough to draw, or :all"
 
   def cluster_viz(assigns) do
     positions = positions(assigns.nodes)
@@ -44,181 +56,234 @@ defmodule ScoreBoardWeb.ClusterViz do
       assigns
       |> assign(:height, svg_height(length(assigns.nodes)))
       |> assign(:links, links(assigns.nodes, positions, assigns.cluster))
-      |> assign(:circles, circles(assigns.nodes, positions, assigns.cluster, assigns.node))
+      |> assign(
+        :circles,
+        circles(assigns.nodes, positions, assigns.cluster, assigns.node, assigns.sustained)
+      )
 
     assigns = assign(assigns, :stories, stories(assigns.circles))
 
     ~H"""
-    <svg
-      id="cluster-viz"
-      phx-hook="ClusterFx"
-      viewBox={"0 0 720 #{@height}"}
-      class="w-full max-w-3xl mx-auto"
-    >
-      <defs>
-        <radialGradient
-          :for={tone <- ~w(success error base-300)}
-          id={"node-#{tone}"}
-          cx="35%"
-          cy="28%"
-          r="80%"
-        >
-          <stop offset="0%" stop-color={"var(--color-#{tone})"} stop-opacity="1" />
-          <stop offset="100%" stop-color={"var(--color-#{tone})"} stop-opacity="0.45" />
-        </radialGradient>
-        <filter id="node-glow" x="-80%" y="-80%" width="260%" height="260%">
-          <feGaussianBlur stdDeviation="6" />
-        </filter>
-      </defs>
-
-      <g :for={link <- @links}>
-        <path
-          d={link.path}
-          class={link.class}
-          fill="none"
-          stroke-width="2.5"
-          stroke-linecap="round"
-          data-link-from={link.from}
-          data-link-to={link.to}
-          data-healthy={to_string(link.healthy?)}
-        />
-        <g :if={link.healthy?}>
-          <circle r="3.5" class="fill-primary opacity-45">
-            <animateMotion dur="2.4s" repeatCount="indefinite" path={link.path} />
-          </circle>
-          <circle r="3.5" class="fill-primary opacity-25">
-            <animateMotion
-              dur="2.4s"
-              begin="-1.2s"
-              repeatCount="indefinite"
-              calcMode="linear"
-              keyPoints="1;0"
-              keyTimes="0;1"
-              path={link.path}
-            />
-          </circle>
-        </g>
-      </g>
-
-      <g :for={circle <- @circles}>
-        <circle
-          cx={circle.x}
-          cy={circle.y}
-          r="26"
-          class={[circle.halo_class, "opacity-30", circle.pulse? && "animate-pulse"]}
-          filter="url(#node-glow)"
-        />
-        <circle
-          cx={circle.x}
-          cy={circle.y}
-          r="20"
-          fill={circle.fill}
-          class="stroke-base-100"
-          stroke-width="2"
-          stroke-opacity="0.7"
-          data-node-dot={circle.node}
-        />
-        <g :for={box <- circle.boxes}>
-          <rect
-            x={box.x}
-            y={box.y - 12}
-            width="38"
-            height="24"
-            rx="8"
-            class={box.class}
-            data-missing-box={circle.node}
-            data-missing-peer={box.peer}
-          />
-          <text
-            x={box.x + 19}
-            y={box.y + 4}
-            text-anchor="middle"
-            class="fill-base-100 text-[12px] font-bold"
+    <div class="relative w-full max-w-3xl mx-auto">
+      <svg
+        id="cluster-viz"
+        phx-hook="ClusterFx"
+        viewBox={"0 0 720 #{@height}"}
+        class="w-full block"
+      >
+        <defs>
+          <radialGradient
+            :for={tone <- ~w(success error base-300)}
+            id={"node-#{tone}"}
+            cx="35%"
+            cy="28%"
+            r="80%"
           >
-            {box.count}
-          </text>
-          <g class="cursor-help">
-            <title>
-              {if box.overflow?,
-                do: "missing_msg: #{box.count} to #{box.peer_label}, capacity: overflow",
-                else:
-                  "missing_msg: #{box.count} to #{box.peer_label}, max_capacity: #{box.capacity || "?"}"} —
-              Orange: queued here for {box.peer_label} (up to the max capacity of {box.capacity ||
-                "?"}) and replayed in order once the connection is back.
-              Red: past capacity - {box.peer_label} receives cursor_expired and reloads
-              from the match processes instead.
-            </title>
-            <circle cx={box.info_x} cy={box.y} r="9" class="fill-info opacity-80" />
-            <text
-              x={box.info_x}
-              y={box.y + 4}
-              text-anchor="middle"
-              class="fill-base-100 text-[11px] font-bold italic"
-            >
-              i
-            </text>
+            <stop offset="0%" stop-color={"var(--color-#{tone})"} stop-opacity="1" />
+            <stop offset="100%" stop-color={"var(--color-#{tone})"} stop-opacity="0.45" />
+          </radialGradient>
+          <filter id="node-glow" x="-80%" y="-80%" width="260%" height="260%">
+            <feGaussianBlur stdDeviation="6" />
+          </filter>
+        </defs>
+
+        <g :for={link <- @links}>
+          <path
+            d={link.path}
+            class={link.class}
+            fill="none"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            data-link-from={link.from}
+            data-link-to={link.to}
+            data-healthy={to_string(link.healthy?)}
+          />
+          <g :if={link.healthy?}>
+            <circle r="3.5" class="fill-primary opacity-45">
+              <animateMotion dur="2.4s" repeatCount="indefinite" path={link.path} />
+            </circle>
+            <circle r="3.5" class="fill-primary opacity-25">
+              <animateMotion
+                dur="2.4s"
+                begin="-1.2s"
+                repeatCount="indefinite"
+                calcMode="linear"
+                keyPoints="1;0"
+                keyTimes="0;1"
+                path={link.path}
+              />
+            </circle>
           </g>
         </g>
-        <rect
-          x={circle.x - circle.label_width / 2}
-          y={circle.y + 28}
-          width={circle.label_width}
-          height="19"
-          rx="9"
-          class="fill-base-300 opacity-70"
-        />
-        <text
-          x={circle.x}
-          y={circle.y + 41}
-          text-anchor="middle"
-          class="fill-current text-[12px] font-mono"
-        >
-          {circle.label}
-        </text>
-        <g
-          :if={circle.reachable?}
-          class="cursor-pointer transition-opacity hover:opacity-80"
-          phx-click="toggle-node"
-          phx-value-node={circle.node}
-        >
+
+        <g :for={circle <- @circles}>
+          <circle
+            cx={circle.x}
+            cy={circle.y}
+            r="26"
+            class={[circle.halo_class, "opacity-30", circle.pulse? && "animate-pulse"]}
+            filter="url(#node-glow)"
+          />
+          <circle
+            cx={circle.x}
+            cy={circle.y}
+            r="20"
+            fill={circle.fill}
+            class="stroke-base-100"
+            stroke-width="2"
+            stroke-opacity="0.7"
+            data-node-dot={circle.node}
+          />
+          <g :for={box <- circle.boxes}>
+            <rect
+              x={box.x}
+              y={box.y - 12}
+              width="38"
+              height="24"
+              rx="8"
+              class={box.class}
+              data-missing-box={circle.node}
+              data-missing-peer={box.peer}
+            />
+            <text
+              x={box.x + 19}
+              y={box.y + 4}
+              text-anchor="middle"
+              class="fill-base-100 text-[12px] font-bold"
+            >
+              {box.count}
+            </text>
+            <g class="cursor-help">
+              <title>
+                {if box.overflow?,
+                  do: "missing_msg: #{box.count} to #{box.peer_label}, capacity: overflow",
+                  else:
+                    "missing_msg: #{box.count} to #{box.peer_label}, max_capacity: #{box.capacity || "?"}"} —
+                Orange: queued here for {box.peer_label} (up to the max capacity of {box.capacity ||
+                  "?"}) and replayed in order once the connection is back.
+                Red: past capacity - {box.peer_label} receives cursor_expired and reloads
+                from the match processes instead.
+              </title>
+              <circle cx={box.info_x} cy={box.y} r="9" class="fill-info opacity-80" />
+              <text
+                x={box.info_x}
+                y={box.y + 4}
+                text-anchor="middle"
+                class="fill-base-100 text-[11px] font-bold italic"
+              >
+                i
+              </text>
+            </g>
+          </g>
           <rect
-            x={circle.x - 45}
-            y={circle.y + 53}
-            width="90"
-            height="22"
-            rx="11"
-            class={if circle.offline?, do: "fill-success", else: "fill-error"}
+            x={circle.x - circle.label_width / 2}
+            y={circle.y + 28}
+            width={circle.label_width}
+            height="19"
+            rx="9"
+            class="fill-base-300 opacity-70"
           />
           <text
             x={circle.x}
-            y={circle.y + 68}
+            y={circle.y + 41}
             text-anchor="middle"
-            class="fill-base-100 text-[11px] font-bold"
+            class="fill-current text-[12px] font-mono"
           >
-            {if circle.offline?, do: "Back online", else: "Go offline"}
+            {circle.label}
           </text>
+          <g
+            :if={circle.reachable?}
+            class="cursor-pointer transition-opacity hover:opacity-80"
+            phx-click="toggle-node"
+            phx-value-node={circle.node}
+          >
+            <rect
+              x={circle.x - 45}
+              y={circle.y + 53}
+              width="90"
+              height="22"
+              rx="11"
+              class={if circle.offline?, do: "fill-success", else: "fill-error"}
+            />
+            <text
+              x={circle.x}
+              y={circle.y + 68}
+              text-anchor="middle"
+              class="fill-base-100 text-[11px] font-bold"
+            >
+              {if circle.offline?, do: "Back online", else: "Go offline"}
+            </text>
+          </g>
         </g>
-      </g>
 
-      <g id="cluster-fx" phx-update="ignore"></g>
-    </svg>
+        <g id="cluster-fx" phx-update="ignore"></g>
+      </svg>
+      <div id="cluster-captions" phx-update="ignore" class="absolute inset-0 pointer-events-none">
+      </div>
+    </div>
     <p class="text-center text-xs opacity-60 -mt-2">
       faint dots = ambient traffic &nbsp;•&nbsp; bright comet = a single goal
       leaving the node its match lives on &nbsp;•&nbsp; convoy = a node back
       online syncing its buffered backlog
     </p>
-    <div :if={@stories != []} class="max-w-3xl mx-auto mt-3 grid gap-2 sm:grid-cols-2">
-      <div
-        :for={story <- @stories}
-        class={["rounded-box bg-base-200/60 px-3 py-2 border-l-4", story.border]}
-        data-story={story.kind}
-        data-story-node={story.node}
-      >
-        <p class="text-xs font-semibold font-mono">{story.title}</p>
-        <p class="text-xs opacity-70 leading-snug">{story.text}</p>
+    <div class="max-w-3xl mx-auto mt-3 h-32 overflow-y-auto">
+      <div class="grid gap-2 sm:grid-cols-2">
+        <div
+          :for={story <- @stories}
+          class={["rounded-box bg-base-200/60 px-3 py-2 border-l-4", story.border]}
+          data-story={story.kind}
+          data-story-node={story.node}
+        >
+          <p class="text-xs font-semibold font-mono">{story.title}</p>
+          <p class="text-xs opacity-70 leading-snug">{story.text}</p>
+        </div>
       </div>
+      <p :if={@stories == []} data-story-empty class="text-center text-xs opacity-40 pt-4">
+        every node online, nothing buffered
+      </p>
     </div>
     """
+  end
+
+  @doc """
+  The buffers worth drawing, and when each of them started filling.
+
+  Between two healthy nodes every goal is briefly pending, so drawing each
+  backlog the moment it appears would put a "1" box on every node all the
+  time. A backlog has to sit unread for #{@hold_ms}ms first. The returned
+  map is the caller's memory of when each `{holder, peer}` backlog started -
+  pass it back on the next snapshot; a backlog that drains and fills again
+  loses its entry and starts its clock over.
+
+  ## Examples
+
+      iex> cluster = %{a: %{blip: false, pending: %{b: 4}, capacity: 20}}
+      iex> {drawn, since} = ClusterViz.sustained(cluster, %{}, 0)
+      iex> {Enum.empty?(drawn), since}
+      {true, %{{:a, :b} => 0}}
+
+      iex> cluster = %{a: %{blip: false, pending: %{b: 4}, capacity: 20}}
+      iex> {drawn, _since} = ClusterViz.sustained(cluster, %{{:a, :b} => 0}, 1_500)
+      iex> Enum.to_list(drawn)
+      [{:a, :b}]
+  """
+  @spec sustained(%{node() => map() | :unreachable}, %{{node(), node()} => integer()}, integer()) ::
+          {MapSet.t({node(), node()}), %{{node(), node()} => integer()}}
+  def sustained(cluster, since, now) do
+    current =
+      for {holder, %{pending: pending}} <- cluster,
+          {peer, count} <- pending,
+          count > 0,
+          into: %{},
+          do: {{holder, peer}, Map.get(since, {holder, peer}, now)}
+
+    drawn =
+      for {pair, started} <- current,
+          now - started >= @hold_ms,
+          into: MapSet.new(),
+          do: pair
+
+    {drawn, current}
   end
 
   @doc """
@@ -349,7 +414,7 @@ defmodule ScoreBoardWeb.ClusterViz do
     nodes |> Enum.zip(coords) |> Map.new()
   end
 
-  defp circles(nodes, positions, cluster, self_node) do
+  defp circles(nodes, positions, cluster, self_node, sustained) do
     for viz_node <- nodes do
       {x, y} = positions[viz_node]
       # A node with no snapshot yet (nil) reads the same as unreachable.
@@ -378,7 +443,7 @@ defmodule ScoreBoardWeb.ClusterViz do
         short_name: short_name(viz_node),
         reachable?: reachable?,
         offline?: offline?,
-        boxes: boxes(buffers(cluster, viz_node), x, y)
+        boxes: boxes(buffers(cluster, viz_node, sustained), x, y)
       }
     end
   end
@@ -388,11 +453,12 @@ defmodule ScoreBoardWeb.ClusterViz do
   # buffer (the sender whose peer is offline, or an offline node buffering its
   # own sends), not on the peer that is merely behind, so a node buffering for
   # two offline peers draws two boxes. Overflow (past the ring buffer) means
-  # that peer will reload instead of replay.
-  defp buffers(cluster, node) do
+  # that peer will reload instead of replay. Backlogs that have not been held
+  # long enough are left out, so normal in-flight traffic draws no box.
+  defp buffers(cluster, node, sustained) do
     case cluster[node] do
       %{pending: pending, capacity: capacity} ->
-        for {peer, count} <- Enum.sort(pending), count > 0 do
+        for {peer, count} <- Enum.sort(pending), count > 0, sustained?(sustained, node, peer) do
           %{
             peer: Atom.to_string(peer),
             peer_label: short_name(peer),
@@ -406,6 +472,9 @@ defmodule ScoreBoardWeb.ClusterViz do
         []
     end
   end
+
+  defp sustained?(:all, _node, _peer), do: true
+  defp sustained?(sustained, node, peer), do: MapSet.member?(sustained, {node, peer})
 
   # The boxes are stacked vertically on the outward side of the node and
   # centred on it, so one box keeps the position it always had.
@@ -433,8 +502,8 @@ defmodule ScoreBoardWeb.ClusterViz do
           border: "border-error",
           title: "#{circle.short_name} is offline",
           text:
-            "The node is offline - a temporary network partition, say. Its links are red " <>
-              "and no events cross them until it is back."
+            "A temporary network partition, say. Its links are red and no events cross " <>
+              "them until it is back."
         }
       end
 
@@ -452,12 +521,12 @@ defmodule ScoreBoardWeb.ClusterViz do
           text:
             if(box.overflow?,
               do:
-                "The buffer is full (capacity #{box.capacity || "?"}), so the oldest messages " <>
-                  "are already gone. On sync #{box.peer_label} gets cursor_expired instead of a " <>
-                  "replay and reloads its data from the DB.",
+                "The buffer is full (capacity #{box.capacity || "?"}), so on sync " <>
+                  "#{box.peer_label} gets cursor_expired instead of a replay and reloads " <>
+                  "its data from the DB.",
               else:
-                "#{box.count} messages are buffered here, waiting for #{box.peer_label} to be " <>
-                  "back - then the missing messages are sent to it in order."
+                "Waiting for #{box.peer_label} to be back - then the missing messages " <>
+                  "are sent to it in order."
             )
         }
       end

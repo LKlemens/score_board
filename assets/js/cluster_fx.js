@@ -8,33 +8,40 @@
 // ring buffer) is a convoy of dots travelling together down the link (see
 // syncStream); a "reload" (the sender overran its buffer, so the receiver's
 // cursor expired) is rings collapsing into the receiving node - no convoy,
-// because nothing was replayed in order. Both carry a short label saying what
-// the motion means, so the animation is not the only explanation.
+// because nothing was replayed in order. Both label the node they land on with
+// a caption saying what the motion means, so the animation is not the only
+// explanation.
 //
-// All read the link geometry straight out of the rendered SVG and draw
-// into the #cluster-fx group, which LiveView is told to ignore so a
-// re-render cannot delete an element mid-flight.
+// All read the link geometry straight out of the rendered SVG and draw into
+// the #cluster-fx group, which LiveView is told to ignore so a re-render
+// cannot delete an element mid-flight. Captions are plain HTML in the
+// #cluster-captions layer over the SVG, placed in percentages of the viewBox
+// so they follow their node as the picture scales.
 
 const SVG_NS = "http://www.w3.org/2000/svg"
 const HOP_MS = 520
 const TRAIL = 6
 const TRAIL_GAP = 7
 const RIPPLE_MS = 650
-const RELOAD_MS = 700
+const RELOAD_MS = 1100
 const RELOAD_RINGS = 3
-const RELOAD_GAP_MS = 140
-const BATCH_MS = 760
+const RELOAD_GAP_MS = 200
+const BATCH_MS = 2200
 const BATCH_MAX = 12
 const BATCH_SPREAD = 20
-const DRAIN_MS = 700
-const STORY_MS = 1500
-const STORY_CHAR = 6.1
-const VIEW_WIDTH = 720
+const DRAIN_MS = 900
+// How long a caption stays up after the animation it explains has finished.
+const CAPTION_LINGER_MS = 2600
+const CAPTION_LIFT = 34
+const CAPTION_STACK = 28
 
 export const ClusterFx = {
   mounted() {
     this.alive = true
     this.drawn = new Set()
+    // How many captions each node currently carries, so a second one stacks
+    // above the first instead of covering it.
+    this.captions = new Map()
     this.handleEvent("goal-flight", payload => this.play(payload))
     this.handleEvent("cluster-flush", payload => this.flush(payload))
   },
@@ -43,6 +50,7 @@ export const ClusterFx = {
     this.alive = false
     this.drawn.forEach(element => element.remove())
     this.drawn.clear()
+    this.captions.clear()
   },
 
   async play({hops, team}) {
@@ -59,6 +67,7 @@ export const ClusterFx = {
   // node. Each reloaded node is drawn once even when several peers overran it.
   flush({streams}) {
     const reloaded = new Set()
+    const captioned = new Set()
 
     ;(streams || []).forEach(({from, to, count, mode}) => {
       if (mode === "reload") {
@@ -69,6 +78,13 @@ export const ClusterFx = {
       } else {
         // Each peer has its own box, so the one that held this backlog drains.
         this.drainBox(from, to)
+
+        // One caption per receiving node even when several peers sync to it.
+        if (!captioned.has(to)) {
+          captioned.add(to)
+          this.caption(to, "all buffered msgs arrive as one package", BATCH_MS)
+        }
+
         this.syncStream(from, to, count)
       }
     })
@@ -105,9 +121,6 @@ export const ClusterFx = {
     if (!link || !fx || link.path.dataset.healthy !== "true") return
 
     const total = link.path.getTotalLength()
-    const middle = link.path.getPointAtLength(total / 2)
-    this.storyLabel(middle.x, middle.y - 20, "all buffered msgs sent as one package", BATCH_MS)
-
     const n = Math.max(2, Math.min(count, BATCH_MAX))
     const group = document.createElementNS(SVG_NS, "g")
     group.setAttribute("class", "fx-comet fx-sync")
@@ -160,12 +173,7 @@ export const ClusterFx = {
     const fx = this.overlay()
     if (!dot || !fx) return
 
-    this.storyLabel(
-      Number(dot.getAttribute("cx")),
-      Number(dot.getAttribute("cy")) - 36,
-      "cursor expired - fetching data from DB",
-      RELOAD_MS
-    )
+    this.caption(name, "cursor expired - fetching data from DB", RELOAD_MS)
 
     for (let index = 0; index < RELOAD_RINGS; index++) {
       const ring = document.createElementNS(SVG_NS, "circle")
@@ -185,42 +193,41 @@ export const ClusterFx = {
     }
   },
 
-  // A short caption in the overlay saying what the animation next to it means.
-  // It lives as long as that animation plus a beat to read it, and is nudged
-  // back inside the viewBox so a label on an edge node stays readable.
-  storyLabel(x, y, text, ms) {
-    const fx = this.overlay()
-    if (!fx) return
+  // A caption pinned beside a node, saying what the animation on it means. It
+  // is an HTML element in the layer over the SVG, positioned in percentages of
+  // the viewBox so it keeps its place as the picture scales, and it outlives
+  // the animation by a beat so there is time to read it.
+  caption(name, text, ms) {
+    const dot = this.el.querySelector(`circle[data-node-dot="${name}"]`)
+    const layer = this.captionLayer()
+    if (!dot || !layer) return
 
-    const width = text.length * STORY_CHAR + 18
-    const half = width / 2
-    const cx = Math.min(Math.max(x, half + 4), VIEW_WIDTH - half - 4)
+    const view = this.el.viewBox.baseVal
+    const stacked = this.captions.get(name) || 0
+    this.captions.set(name, stacked + 1)
 
-    const group = document.createElementNS(SVG_NS, "g")
-    group.setAttribute("class", "fx-story")
+    const element = document.createElement("div")
+    element.className = "cluster-caption"
+    element.textContent = text
+    element.style.left = `${(Number(dot.getAttribute("cx")) / view.width) * 100}%`
+    element.style.top = `${(Number(dot.getAttribute("cy")) / view.height) * 100}%`
+    element.style.setProperty("--caption-lift", `${CAPTION_LIFT + stacked * CAPTION_STACK}px`)
 
-    const box = document.createElementNS(SVG_NS, "rect")
-    box.setAttribute("x", String(cx - half))
-    box.setAttribute("y", String(y - 11))
-    box.setAttribute("width", String(width))
-    box.setAttribute("height", "22")
-    box.setAttribute("rx", "11")
+    const total = ms + CAPTION_LINGER_MS
+    element.style.animationDuration = `${total}ms`
 
-    const label = document.createElementNS(SVG_NS, "text")
-    label.setAttribute("x", String(cx))
-    label.setAttribute("y", String(y + 4))
-    label.setAttribute("text-anchor", "middle")
-    label.textContent = text
-
-    group.appendChild(box)
-    group.appendChild(label)
-    fx.appendChild(group)
-    this.drawn.add(group)
+    layer.appendChild(element)
+    this.drawn.add(element)
 
     setTimeout(() => {
-      this.drawn.delete(group)
-      group.remove()
-    }, ms + STORY_MS)
+      this.captions.set(name, Math.max(0, (this.captions.get(name) || 1) - 1))
+      this.drawn.delete(element)
+      element.remove()
+    }, total)
+  },
+
+  captionLayer() {
+    return this.el.parentElement && this.el.parentElement.querySelector("#cluster-captions")
   },
 
   // The graph draws one path per unordered pair, so a hop may have to be

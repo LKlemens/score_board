@@ -41,7 +41,9 @@ defmodule ScoreBoardWeb.ScoreLive do
             node: node(),
             lane: lane,
             error: nil,
-            blip: Blip.enabled?(lane)
+            blip: Blip.enabled?(lane),
+            buffer_since: %{},
+            sustained: MapSet.new()
           )
 
         {:ok, refresh(socket)}
@@ -54,6 +56,8 @@ defmodule ScoreBoardWeb.ScoreLive do
             lane: nil,
             error: "All demo lanes are busy right now - try again in a moment.",
             blip: false,
+            buffer_since: %{},
+            sustained: MapSet.new(),
             nodes: [],
             cluster: %{},
             boards: %{},
@@ -170,9 +174,25 @@ defmodule ScoreBoardWeb.ScoreLive do
         %{id: id, owner: owner(lane, id), true_score: true_score(lane, id)}
       end)
 
+    # A backlog only earns a box once it has been held a while, so normal
+    # in-flight traffic between healthy nodes does not draw one.
+    {sustained, since} =
+      ClusterViz.sustained(
+        cluster,
+        socket.assigns.buffer_since,
+        System.monotonic_time(:millisecond)
+      )
+
     socket
     |> push_flush(cluster)
-    |> assign(nodes: nodes, cluster: cluster, boards: boards, matches: matches)
+    |> assign(
+      nodes: nodes,
+      cluster: cluster,
+      boards: boards,
+      matches: matches,
+      buffer_since: since,
+      sustained: sustained
+    )
   end
 
   defp toggle_blip(lane, target) when target == node() do
@@ -263,7 +283,12 @@ defmodule ScoreBoardWeb.ScoreLive do
           </span>
         </div>
 
-        <ClusterViz.cluster_viz nodes={@nodes} cluster={@cluster} node={@node} />
+        <ClusterViz.cluster_viz
+          nodes={@nodes}
+          cluster={@cluster}
+          node={@node}
+          sustained={@sustained}
+        />
 
         <div
           :if={@error}
