@@ -96,6 +96,22 @@ defmodule ScoreBoard.Matches do
     Horde.Registry.select(@registry, [{{{:match, lane, :"$1"}, :_, :_}, [], [:"$1"]}])
   end
 
+  @doc """
+  Stops every match process of `lane`, wherever in the cluster they run.
+
+  Used when a lane is recycled: the next tenant must not inherit the previous
+  one's matches. Scores live in the DB, so clearing that is a separate step.
+  """
+  @spec stop_markets(Lane.id()) :: :ok
+  def stop_markets(lane) do
+    for id <- list_matches(lane),
+        [{pid, _value}] <- [Horde.Registry.lookup(@registry, {:match, lane, id})] do
+      Horde.DynamicSupervisor.terminate_child(@supervisor, pid)
+    end
+
+    :ok
+  end
+
   @doc "Scores a goal on the match process, wherever it runs."
   @spec score_goal(Lane.id(), match_id(), Match.team()) :: :ok | {:error, :match_not_found}
   def score_goal(lane, id, team) do

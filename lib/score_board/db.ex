@@ -45,6 +45,16 @@ defmodule ScoreBoard.DB do
   @spec all(Lane.id()) :: %{Matches.match_id() => Match.score()}
   def all(lane), do: safe_call(lane, :all, %{})
 
+  @doc """
+  Empties this node's replica for `lane`.
+
+  Local only, and deliberately not replicated: a recycled lane is cleared on
+  every node in turn (see `ScoreBoard.Lanes`), because max-merge would
+  resurrect any row a peer still held.
+  """
+  @spec clear(Lane.id()) :: :ok | :error
+  def clear(lane), do: safe_call(lane, :clear, :error)
+
   # The lane's replica can be briefly absent - a just-joined node, or one
   # shutting down mid Horde redistribution. Callers (a restarting match) must
   # not crash on that; they get the fallback and retry.
@@ -85,6 +95,10 @@ defmodule ScoreBoard.DB do
 
   def handle_call(:all, _from, state) do
     {:reply, state.scores, state}
+  end
+
+  def handle_call(:clear, _from, state) do
+    {:reply, :ok, %{state | scores: %{}}}
   end
 
   @impl GenServer

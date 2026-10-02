@@ -31,6 +31,7 @@ defmodule ScoreBoardWeb.ScoreLive do
           # Local board changes re-render instantly; remote boards are polled,
           # and node up/down reshapes the columns.
           Board.subscribe(lane)
+          Phoenix.PubSub.subscribe(ScoreBoard.PubSub, Lanes.topic(tenant))
           :net_kernel.monitor_nodes(true)
           Process.send_after(self(), :poll, @poll_interval)
         end
@@ -39,8 +40,10 @@ defmodule ScoreBoardWeb.ScoreLive do
           assign(socket,
             page_title: "Scoreboard",
             node: node(),
+            tenant: tenant,
             lane: lane,
             error: nil,
+            expired?: false,
             blip: Blip.enabled?(lane),
             buffer_since: %{},
             sustained: MapSet.new()
@@ -53,8 +56,10 @@ defmodule ScoreBoardWeb.ScoreLive do
           assign(socket,
             page_title: "Scoreboard",
             node: node(),
+            tenant: tenant,
             lane: nil,
             error: "All demo lanes are busy right now - try again in a moment.",
+            expired?: false,
             blip: false,
             buffer_since: %{},
             sustained: MapSet.new(),
@@ -70,6 +75,8 @@ defmodule ScoreBoardWeb.ScoreLive do
 
   @impl Phoenix.LiveView
   def handle_event("goal", %{"id" => id, "team" => team}, socket) do
+    Lanes.touch(socket.assigns.tenant)
+
     case score_goal_healing(socket.assigns.lane, id, team_atom(team)) do
       :ok -> {:noreply, socket |> assign(error: nil) |> push_goal_flight(id, team)}
       {:error, :match_not_found} -> {:noreply, assign(socket, error: "Match #{id} is gone.")}
@@ -77,6 +84,7 @@ defmodule ScoreBoardWeb.ScoreLive do
   end
 
   def handle_event("toggle-node", %{"node" => node_str}, socket) do
+    Lanes.touch(socket.assigns.tenant)
     lane = socket.assigns.lane
     target = String.to_existing_atom(node_str)
     toggle_blip(lane, target)
@@ -87,8 +95,18 @@ defmodule ScoreBoardWeb.ScoreLive do
 
   @impl Phoenix.LiveView
   def handle_info(:poll, socket) do
-    Process.send_after(self(), :poll, @poll_interval)
-    {:noreply, refresh(socket)}
+    # An expired page is static: no lane left to poll.
+    if socket.assigns.expired? do
+      {:noreply, socket}
+    else
+      Process.send_after(self(), :poll, @poll_interval)
+      {:noreply, refresh(socket)}
+    end
+  end
+
+  # The lane went back to the pool after the idle TTL; this page is done.
+  def handle_info(:lane_expired, socket) do
+    {:noreply, assign(socket, expired?: true, lane: nil, matches: [], nodes: [], cluster: %{})}
   end
 
   def handle_info({:nodeup, _node}, socket), do: {:noreply, refresh(socket)}
@@ -274,7 +292,12 @@ defmodule ScoreBoardWeb.ScoreLive do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash}>
-      <div class="space-y-8">
+      <div :if={@expired?} class="max-w-xl mx-auto text-center space-y-4 py-16">
+        <h1 class="text-2xl font-bold">Your session is gone</h1>
+        <a href="/" class="btn btn-primary">Start a new one</a>
+      </div>
+
+      <div :if={!@expired?} class="space-y-8">
         <div class="text-center space-y-2">
           <h1 class="text-2xl font-bold">Live Scoreboard</h1>
           <p class="text-sm opacity-70 font-mono">{@node}</p>

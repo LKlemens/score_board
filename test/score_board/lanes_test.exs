@@ -65,6 +65,62 @@ defmodule ScoreBoard.LanesTest do
     assert {:ok, _id} = Lanes.assign(last)
   end
 
+  describe "idle sweep" do
+    setup do
+      ttl = Application.get_env(:score_board, :lane_ttl_ms)
+      on_exit(fn -> Application.put_env(:score_board, :lane_ttl_ms, ttl) end)
+      :ok
+    end
+
+    test "a lane idle past the TTL goes back to the pool", %{tenant: tenant} do
+      {:ok, id} = Lanes.assign(tenant)
+      Application.put_env(:score_board, :lane_ttl_ms, 0)
+
+      assert tenant in Lanes.sweep()
+      assert :error = Lanes.lane_for(tenant)
+      assert {:ok, ^id} = Lanes.assign(tenant)
+    end
+
+    test "touching a lane keeps it", %{tenant: tenant} do
+      {:ok, id} = Lanes.assign(tenant)
+      Application.put_env(:score_board, :lane_ttl_ms, :timer.minutes(5))
+      Lanes.touch(tenant)
+
+      assert Lanes.sweep() == []
+      assert {:ok, ^id} = Lanes.lane_for(tenant)
+    end
+
+    test "the tenant hears that its lane expired", %{tenant: tenant} do
+      {:ok, _id} = Lanes.assign(tenant)
+      :ok = Phoenix.PubSub.subscribe(ScoreBoard.PubSub, Lanes.topic(tenant))
+      Application.put_env(:score_board, :lane_ttl_ms, 0)
+
+      Lanes.sweep()
+
+      assert_receive :lane_expired, 1_000
+    end
+
+    test "a swept lane is wiped before it is handed on", %{tenant: tenant} do
+      {:ok, id} = Lanes.assign(tenant)
+      assert_eventually(fn -> assert Matches.list_matches(id) != [] end)
+      [match | _] = Matches.list_matches(id)
+      :ok = Matches.score_goal(id, match, :home)
+
+      Application.put_env(:score_board, :lane_ttl_ms, 0)
+      Lanes.sweep()
+
+      assert Matches.list_matches(id) == []
+      assert ScoreBoard.DB.all(id) == %{}
+    end
+
+    test "an untouched tenant is swept even if it never acted", %{tenant: tenant} do
+      {:ok, _id} = Lanes.assign(tenant)
+      Application.put_env(:score_board, :lane_ttl_ms, 0)
+
+      assert tenant in Lanes.sweep()
+    end
+  end
+
   test "each lane runs its own event bus, faultable in isolation" do
     [one, two | _] = Lane.ids()
 

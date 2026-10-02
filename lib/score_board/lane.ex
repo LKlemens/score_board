@@ -17,7 +17,15 @@ defmodule ScoreBoard.Lane do
 
   @doc "How many lanes the pool pre-starts."
   @spec count() :: pos_integer()
-  def count, do: Application.get_env(:score_board, :lane_count, 16)
+  def count, do: Application.get_env(:score_board, :lane_count, 200)
+
+  @doc "How long a lane may sit idle before it goes back to the pool."
+  @spec ttl_ms() :: non_neg_integer()
+  def ttl_ms, do: Application.get_env(:score_board, :lane_ttl_ms, :timer.minutes(5))
+
+  @doc "How often idle lanes are swept."
+  @spec sweep_ms() :: pos_integer()
+  def sweep_ms, do: Application.get_env(:score_board, :lane_sweep_ms, :timer.seconds(30))
 
   @doc "The ring-buffer size each lane's event bus keeps."
   @spec buffer_size() :: pos_integer()

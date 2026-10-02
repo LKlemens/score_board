@@ -12,9 +12,11 @@ config :score_board,
 
 # The tenant pool: how many isolated lanes are pre-started, and the ring
 # buffer each lane's event bus keeps (the overflow-reload demo needs a small
-# one).
-config :score_board, :lane_count, 16
+# one). A lane idle past :lane_ttl_ms goes back to the pool.
+config :score_board, :lane_count, 200
 config :score_board, :lane_buffer_size, 5
+config :score_board, :lane_ttl_ms, :timer.minutes(5)
+config :score_board, :lane_sweep_ms, :timer.seconds(30)
 
 # Compile echo_pubsub's fault-injection hook into this app's build so the
 # UI blip button can make the local worker reject incoming batches

@@ -24,6 +24,18 @@ defmodule ScoreBoardWeb.ScoreLiveTest do
     {:ok, conn: conn, tenant: tenant, lane: lane, id: Atom.to_string(test)}
   end
 
+  describe "idle expiry" do
+    test "the page turns static when the lane expires", %{conn: conn, tenant: tenant} do
+      {:ok, view, html} = live(conn, ~p"/")
+      refute html =~ "Your session is gone"
+
+      Phoenix.PubSub.broadcast(ScoreBoard.PubSub, Lanes.topic(tenant), :lane_expired)
+
+      assert render(view) =~ "Your session is gone"
+      assert render(view) =~ "Start a new one"
+    end
+  end
+
   # The score is rendered as separately coloured spans, so the assertions
   # read the cell's text rather than its markup.
   defp score_cell(view, id), do: text(view, ~s{[data-score-id="#{id}"]})
