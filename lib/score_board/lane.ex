@@ -21,7 +21,7 @@ defmodule ScoreBoard.Lane do
 
   @doc "The ring-buffer size each lane's event bus keeps."
   @spec buffer_size() :: pos_integer()
-  def buffer_size, do: Application.get_env(:score_board, :lane_buffer_size, 20)
+  def buffer_size, do: Application.get_env(:score_board, :lane_buffer_size, 5)
 
   @doc "This lane's EchoPubSub instance name."
   @spec pubsub(id()) :: module()

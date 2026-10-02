@@ -14,7 +14,7 @@ config :score_board,
 # buffer each lane's event bus keeps (the overflow-reload demo needs a small
 # one).
 config :score_board, :lane_count, 16
-config :score_board, :lane_buffer_size, 20
+config :score_board, :lane_buffer_size, 5
 
 # Compile echo_pubsub's fault-injection hook into this app's build so the
 # UI blip button can make the local worker reject incoming batches
