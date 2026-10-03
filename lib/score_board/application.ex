@@ -23,11 +23,11 @@ defmodule ScoreBoard.Application do
       # that need at-least-once delivery. A blip halts only the event
       # stream; the UI stays live.
       Supervisor.child_spec({Phoenix.PubSub, name: ScoreBoard.PubSub}, id: ScoreBoard.PubSub),
-      # buffer_size 20 keeps the overflow demo reachable: hold a blip past
-      # ~20 events and the producer expires this node's cursor
+      # buffer_size 5 keeps the overflow demo reachable: hold a blip past
+      # ~5 events and the producer expires this node's cursor
       Supervisor.child_spec(
         {Phoenix.PubSub,
-         name: ScoreBoard.EchoPubSub, adapter: EchoPubSub, pool_size: 1, buffer_size: 20},
+         name: ScoreBoard.EchoPubSub, adapter: EchoPubSub, pool_size: 1, buffer_size: 5},
         id: ScoreBoard.EchoPubSub
       ),
       {Horde.Registry, name: ScoreBoard.MatchRegistry, keys: :unique, members: :auto},
