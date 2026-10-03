@@ -31,7 +31,7 @@ defmodule ScoreBoardWeb.ScoreLive do
         if connected?(socket) do
           # Local board changes re-render instantly; remote boards are polled,
           # and node up/down reshapes the columns.
-          Stats.visit()
+          Stats.visit(tenant)
           Board.subscribe(lane)
           Phoenix.PubSub.subscribe(ScoreBoard.PubSub, Lanes.topic(tenant))
           :net_kernel.monitor_nodes(true)

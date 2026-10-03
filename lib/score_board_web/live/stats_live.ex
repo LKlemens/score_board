@@ -74,13 +74,13 @@ defmodule ScoreBoardWeb.StatsLive do
             key="online"
             label="Online now"
             value={to_string(@stats.online)}
-            hint="open scoreboards"
+            hint="people with the page open"
           />
           <.tile
             key="visits"
-            label="Visits"
+            label="Visitors"
             value={to_string(@stats.visits)}
-            hint="since first boot"
+            hint="unique browsers"
           />
           <.tile
             key="peak"

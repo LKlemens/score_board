@@ -18,7 +18,7 @@ defmodule ScoreBoardWeb.StatsLiveTest do
   test "a visitor shows up in the online count", %{conn: conn} do
     {:ok, pid} = Agent.start_link(fn -> :visitor end)
     on_exit(fn -> if Process.alive?(pid), do: Agent.stop(pid) end)
-    Stats.visit(pid)
+    Stats.visit("stats-live-visitor", pid)
     assert_eventually(fn -> assert Stats.snapshot().online >= 1 end)
 
     online = Stats.snapshot().online

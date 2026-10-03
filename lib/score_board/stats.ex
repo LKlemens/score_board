@@ -1,14 +1,16 @@
 defmodule ScoreBoard.Stats do
   @moduledoc """
-  Counts who is using the demo: visits, who is online right now, and how many
+  Counts who is using the demo: visitors, who is online right now, and how many
   visitors the lane pool had to turn away.
 
-  "Online" is exact rather than sampled - each connected LiveView registers
-  itself and is monitored, so a closed tab drops the count on `:DOWN`. Counts
-  live in this process, so they are per node; only the web node serves pages,
-  so that is the whole picture. When a `ScoreBoard.Repo` is configured the
-  totals are seeded from the last persisted sample and a new sample is written
-  every `sample_ms/0`, which is what survives a restart.
+  Both visitor numbers are keyed on the tenant cookie, not on the LiveView
+  process, so a refresh or a second tab is still one browser. "Online" is
+  exact rather than sampled - each connected LiveView is monitored, so a closed
+  tab drops out on `:DOWN` and the person disappears once their last tab is
+  gone. Counts live in this process, so they are per node; only the web node
+  serves pages, so that is the whole picture. When a `ScoreBoard.Repo` is
+  configured the totals are seeded from the last persisted sample and a new
+  sample is written every `sample_ms/0`, which is what survives a restart.
   """
   use GenServer
 
@@ -30,9 +32,14 @@ defmodule ScoreBoard.Stats do
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(_opts), do: GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
 
-  @doc "Records a visitor and counts them as online until their process dies."
-  @spec visit(pid()) :: :ok
-  def visit(pid \\ self()), do: GenServer.cast(__MODULE__, {:visit, pid})
+  @doc """
+  Records a visitor and counts them as online until their process dies.
+
+  `tenant` is the browser's cookie, so reloading or opening a second tab adds
+  a process to an existing visitor rather than a new one.
+  """
+  @spec visit(Lanes.tenant(), pid()) :: :ok
+  def visit(tenant, pid \\ self()), do: GenServer.cast(__MODULE__, {:visit, tenant, pid})
 
   @doc "Records a visitor who found the pool full."
   @spec rejected() :: :ok
@@ -56,25 +63,29 @@ defmodule ScoreBoard.Stats do
        visits: seed.visits,
        rejected: seed.rejected,
        peak_online: 0,
+       # pid => tenant, so several tabs of one browser are one visitor.
        online: %{},
+       seen: MapSet.new(),
        alerted_at: nil
      }}
   end
 
   @impl GenServer
-  def handle_cast({:visit, pid}, state) do
+  def handle_cast({:visit, tenant, pid}, state) do
     if Map.has_key?(state.online, pid) do
       {:noreply, state}
     else
-      ref = Process.monitor(pid)
-      online = Map.put(state.online, pid, ref)
+      Process.monitor(pid)
+      online = Map.put(state.online, pid, tenant)
+      first_visit? = not MapSet.member?(state.seen, tenant)
 
       {:noreply,
        %{
          state
-         | visits: state.visits + 1,
+         | visits: state.visits + if(first_visit?, do: 1, else: 0),
+           seen: MapSet.put(state.seen, tenant),
            online: online,
-           peak_online: max(state.peak_online, map_size(online))
+           peak_online: max(state.peak_online, count_online(online))
        }}
     end
   end
@@ -104,12 +115,14 @@ defmodule ScoreBoard.Stats do
   defp build_snapshot(state) do
     %{
       visits: state.visits,
-      online: map_size(state.online),
+      online: count_online(state.online),
       peak_online: state.peak_online,
       rejected: state.rejected,
       lanes: Lanes.stats()
     }
   end
+
+  defp count_online(online), do: online |> Map.values() |> Enum.uniq() |> length()
 
   defp schedule_sample, do: Process.send_after(self(), :sample, sample_ms())
 
