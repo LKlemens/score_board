@@ -36,6 +36,8 @@ defmodule ScoreBoard.Application do
       # The tenant lane pool: per lane, an isolated event bus + DB replica +
       # board, plus the tracker that assigns a free lane per browser cookie.
       ScoreBoard.LanePool,
+      # Dashboard counters; reads the lane pool, so it starts after it.
+      ScoreBoard.Stats,
       # Start to serve requests, typically the last entry
       ScoreBoardWeb.Endpoint
     ]

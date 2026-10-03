@@ -47,6 +47,10 @@ defmodule ScoreBoard.Lanes do
   @spec sweep() :: [tenant()]
   def sweep, do: GenServer.call(__MODULE__, :sweep)
 
+  @doc "How much of the pool is in use right now."
+  @spec stats() :: %{total: non_neg_integer(), taken: non_neg_integer(), free: non_neg_integer()}
+  def stats, do: GenServer.call(__MODULE__, :stats)
+
   @doc "The PubSub topic a tenant hears about its own lane on."
   @spec topic(tenant()) :: String.t()
   def topic(tenant), do: "lane:#{tenant}"
@@ -89,6 +93,12 @@ defmodule ScoreBoard.Lanes do
   @impl GenServer
   def handle_call({:lane_for, tenant}, _from, state) do
     {:reply, Map.fetch(state.taken, tenant), state}
+  end
+
+  @impl GenServer
+  def handle_call(:stats, _from, state) do
+    taken = map_size(state.taken)
+    {:reply, %{total: taken + length(state.free), taken: taken, free: length(state.free)}, state}
   end
 
   @impl GenServer

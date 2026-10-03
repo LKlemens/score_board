@@ -19,6 +19,7 @@ defmodule ScoreBoardWeb.Router do
     pipe_through :browser
 
     live "/", ScoreLive
+    live "/stats", StatsLive
   end
 
   # Other scopes may use custom stacks.

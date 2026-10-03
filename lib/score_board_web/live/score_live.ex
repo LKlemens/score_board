@@ -16,6 +16,7 @@ defmodule ScoreBoardWeb.ScoreLive do
   alias ScoreBoard.Cluster
   alias ScoreBoard.Lanes
   alias ScoreBoard.Matches
+  alias ScoreBoard.Stats
   alias ScoreBoardWeb.ClusterViz
 
   @poll_interval 500
@@ -30,6 +31,7 @@ defmodule ScoreBoardWeb.ScoreLive do
         if connected?(socket) do
           # Local board changes re-render instantly; remote boards are polled,
           # and node up/down reshapes the columns.
+          Stats.visit()
           Board.subscribe(lane)
           Phoenix.PubSub.subscribe(ScoreBoard.PubSub, Lanes.topic(tenant))
           :net_kernel.monitor_nodes(true)
@@ -52,6 +54,8 @@ defmodule ScoreBoardWeb.ScoreLive do
         {:ok, refresh(socket)}
 
       {:error, :pool_exhausted} ->
+        if connected?(socket), do: Stats.rejected()
+
         socket =
           assign(socket,
             page_title: "Scoreboard",
