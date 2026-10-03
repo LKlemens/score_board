@@ -15,6 +15,7 @@ defmodule ScoreBoard.Application do
 
     children = [
       ScoreBoardWeb.Telemetry,
+      {Task.Supervisor, name: ScoreBoard.TaskSupervisor},
       {Cluster.Supervisor, [topologies, [name: ScoreBoard.ClusterSupervisor]]},
       {DNSCluster, query: Application.get_env(:score_board, :dns_cluster_query) || :ignore},
       # The shared, transient PubSub (PG2): LiveView internals and each lane
