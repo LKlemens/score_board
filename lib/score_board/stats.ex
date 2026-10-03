@@ -76,9 +76,9 @@ defmodule ScoreBoard.Stats do
   def serving?, do: Phoenix.Endpoint.server?(:score_board, ScoreBoardWeb.Endpoint)
 
   @doc false
-  @spec digest_due?(StatsDigest.t() | nil, DateTime.t(), 0..23) :: boolean()
-  def digest_due?(last_digest, now, hour) do
-    now.hour >= hour and (last_digest == nil or Date.compare(last_digest.sent_on, now) == :lt)
+  @spec digest_due?(Date.t() | nil, DateTime.t(), 0..23) :: boolean()
+  def digest_due?(last_day, now, hour) do
+    now.hour >= hour and (last_day == nil or Date.compare(last_day, now) == :lt)
   end
 
   @doc false
@@ -105,7 +105,9 @@ defmodule ScoreBoard.Stats do
        seen: MapSet.new(),
        alerted_at: nil,
        # The last snapshot written, so an unchanged minute writes nothing.
-       last_sample: nil
+       last_sample: nil,
+       # The day this run already handled a digest for.
+       digest_on: nil
      }}
   end
 
@@ -163,17 +165,30 @@ defmodule ScoreBoard.Stats do
 
   # Once a day, past the configured hour: report the day's movement, or record
   # the day as handled and stay quiet when nothing moved.
+  #
+  # Needs the repo: without one there is nowhere to remember what was sent, and
+  # a digest with no memory would go out on every tick. The day is also kept in
+  # this server's state, so a failed query cannot restart that either.
   defp maybe_digest(state, snapshot) do
-    last = StatsStore.last_digest()
     now = DateTime.utc_now()
 
-    if digest_due?(last, now, digest_hour()) do
-      changed? = digest_changed?(last, snapshot)
-      if changed?, do: Telegram.notify(digest_message(last, snapshot))
-      StatsStore.record_digest(snapshot, DateTime.to_date(now), changed?)
-    end
+    if StatsStore.enabled?() do
+      last = StatsStore.last_digest()
+      last_day = state.digest_on || (last && last.sent_on)
 
-    state
+      if digest_due?(last_day, now, digest_hour()) do
+        today = DateTime.to_date(now)
+        changed? = digest_changed?(last, snapshot)
+
+        if changed?, do: Telegram.notify(digest_message(last, snapshot))
+        StatsStore.record_digest(snapshot, today, changed?)
+        %{state | digest_on: today}
+      else
+        state
+      end
+    else
+      state
+    end
   end
 
   defp digest_message(last, snapshot) do

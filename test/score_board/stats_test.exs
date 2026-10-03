@@ -183,16 +183,29 @@ defmodule ScoreBoard.StatsTest do
       assert Stats.digest_due?(nil, ~U[2026-10-03 08:00:00Z], 8)
     end
 
-    test "not due again on a day already recorded" do
-      today = %ScoreBoard.StatsDigest{sent_on: ~D[2026-10-03]}
-
-      refute Stats.digest_due?(today, ~U[2026-10-03 20:00:00Z], 8)
+    test "not due again on a day already handled" do
+      refute Stats.digest_due?(~D[2026-10-03], ~U[2026-10-03 20:00:00Z], 8)
     end
 
     test "due again the next day" do
-      yesterday = %ScoreBoard.StatsDigest{sent_on: ~D[2026-10-02]}
+      assert Stats.digest_due?(~D[2026-10-02], ~U[2026-10-03 09:00:00Z], 8)
+    end
+  end
 
-      assert Stats.digest_due?(yesterday, ~U[2026-10-03 09:00:00Z], 8)
+  describe "the digest without a database" do
+    test "never fires, because there is nowhere to remember what was sent" do
+      # The repo is down in test, which is the same shape as a dev node with no
+      # DATABASE_URL: last_digest/0 is nil, so an unguarded check would send on
+      # every tick.
+      refute ScoreBoard.StatsStore.enabled?()
+      assert ScoreBoard.StatsStore.last_digest() == nil
+
+      before = Stats.snapshot()
+      send(Process.whereis(Stats), :sample)
+      send(Process.whereis(Stats), :sample)
+
+      assert_eventually(fn -> assert Stats.snapshot().visits == before.visits end)
+      assert Process.alive?(Process.whereis(Stats))
     end
   end
 
