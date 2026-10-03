@@ -1,95 +1,54 @@
 # ScoreBoard
 
-To start your Phoenix server:
+A live demo of [EchoPubSub](https://github.com/LKlemens/echo_pubsub): a three-node
+BEAM cluster where you can take a node offline mid-game and watch the events it
+missed replay in order when it comes back.
 
-* Run `mix setup` to install and setup dependencies
-* Start Phoenix endpoint with `mix phx.server` or inside IEx with `iex -S mix phx.server`
+![Scoreboard demo](https://github.com/LKlemens/score_board/releases/download/media-v1/demo.gif)
 
-Now you can visit [`localhost:4000`](http://localhost:4000) from your browser.
+Live at [scoreboard-pool.fly.dev](https://scoreboard-pool.fly.dev). Every browser
+gets its own isolated cluster, so several people can break the demo at once
+without touching each other's state.
 
-## Running the two-node demo
+What the recording shows:
 
-Start two named nodes in separate terminals (libcluster's LocalEpmd strategy
-discovers and connects all local nodes automatically - no multicast needed):
+* **One board per node**, next to the true score held by the match process. A
+  match is a single process placed by Horde; the *Owner* column says where it
+  runs. Boards are read over `:erpc`, so the display stays honest even when the
+  event bus is degraded.
+* **Take a node offline** - its column freezes and turns red while the others
+  advance. Nothing is dropped: the other nodes buffer for it, and the orange box
+  counts what is held for each lagging peer.
+* **Bring it back** - the backlog replays in order, drawn as a convoy of dots.
+  The board converges. Plain PubSub would have lost those events for good.
+* **Overflow the ring buffer** (it holds 5) and the box turns red: the peer's
+  cursor fell off the end, so it gets `{:cursor_expired, node}` instead of a
+  replay and reloads from the source of truth. Converged either way.
+
+## Running it locally
 
 ```sh
-just board 1
-just board 2
+mix setup
+just board 1   # then `just board 2`, `just board 3` in their own terminals
 ```
 
-Add as many as you like (`just board 3`, ...) - node `boardN` serves on port
-`4000+N-1`. Without `just`:
+Node `boardN` serves on port `4000+N-1`; libcluster's LocalEpmd strategy connects
+them automatically. Without `just`:
 
 ```sh
 PORT=4000 iex --sname board1 -S mix phx.server
-PORT=4001 iex --sname board2 -S mix phx.server
 ```
 
-Verify clustering from either IEx shell - the peer should be listed:
+Open the ports side by side and score a goal.
 
-```elixir
-iex(board1@host)> Node.list()
-[:board2@host]
-```
+## How it fits together
 
-Then open [`localhost:4000`](http://localhost:4000) and
-[`localhost:4001`](http://localhost:4001) side by side.
+The app runs **two PubSub instances side by side** - the incremental adoption
+story. `ScoreBoard.PubSub` (the default PG2 adapter) carries transient traffic:
+LiveView internals and the boards' local UI notifications. EchoPubSub carries
+only the domain events that must not be lost. During a blip the event stream
+freezes and later replays, while the UI stays fully live, because it rides the
+other instance.
 
-### Demo script
-
-Each match runs as a single process somewhere in the cluster (placed by
-Horde) - the source of truth for its score. Each node keeps its own derived
-board in ETS, fed by PubSub events.
-
-The app runs **two PubSub instances side by side** - the incremental
-adoption story: `ScoreBoard.PubSub` (default PG2 adapter) keeps carrying
-transient traffic (LiveView internals, the boards' local UI notifications),
-while `ScoreBoard.EchoPubSub` (EchoPubSub adapter) carries only the domain
-events that must not be lost. During a blip the event stream freezes and
-later replays - but the UI stays fully live, because it rides the other
-instance.
-
-Every node's page shows *all* nodes' boards side by side, next to the true
-score held by each match process: one column per node, read over `:erpc` so
-the display stays reliable even when PubSub is degraded. A red cell means
-that node's board disagrees with the true score (stale or missing data);
-an *offline* badge marks an unreachable node.
-
-1. Create a few matches from either browser tab - they appear in both, and
-   the *Owner node* column shows where each match process actually lives
-   (creating on `board1` does not mean owning on `board1`).
-2. Click goal buttons from either tab: the goal is routed to the owning
-   match process, wherever it runs, and every node's board converges.
-3. Failover: kill the node that owns a match (`Ctrl+C` twice in its
-   terminal). Horde restarts the match on the survivor, which reads its
-   score back from `ScoreBoard.DB` — a single cluster-wide process
-   simulating a database that matches write through to on every goal. The
-   DB itself rides the same Horde supervisor: if its host dies it is
-   restarted on a survivor — empty, being in-memory — and restarted
-   matches then fall back to the survivor's derived board while goals
-   refill the DB.
-4. Network blip (EchoPubSub): press *Go offline* on node B - its worker now
-   rejects incoming batches *below the ack*, so remote producers buffer and
-   retry. **Blip a node that does not own the match you score**: events for
-   locally-owned matches are dispatched without crossing the network, so
-   blipping the owner shows nothing (check the *Owner* column - after a
-   fresh start the first-booted node owns all prefilled matches). Score goals on node A: B's column turns red and freezes on every
-   page while A's advances. Press *Back online* - the buffered events
-   replay **in order** and B converges. (Plain PG2 would have lost them
-   forever.) The *1ms blip* and *5s outage* buttons do the same with
-   automatic recovery.
-5. Buffer overflow: stay offline on B past ~20 events scored on A - B's
-   cursor falls off A's ring buffer (`buffer_size: 20`). On reconnect B
-   receives `{:cursor_expired, node}` instead of a replay and the board
-   reloads everything from the match processes - converged either way,
-   just via the documented recovery path.
-
-Ready to run in production? Please [check our deployment guides](https://phoenix.hexdocs.pm/deployment.html).
-
-## Learn more
-
-* Official website: https://www.phoenixframework.org/
-* Guides: https://phoenix.hexdocs.pm/overview.html
-* Docs: https://phoenix.hexdocs.pm
-* Forum: https://elixirforum.com/c/phoenix-forum
-* Source: https://github.com/phoenixframework/phoenix
+Each node keeps its own derived board in ETS, fed by those events, and its own
+replica of `ScoreBoard.DB` - the store a restarted match reads its score back from.
