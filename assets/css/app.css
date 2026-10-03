@@ -195,7 +195,7 @@
   stroke-width: 3;
   transform-box: fill-box;
   transform-origin: center;
-  animation: fx-reload 0.7s ease-in forwards;
+  animation: fx-reload 1.1s ease-in forwards;
 }
 
 /* The missing-count box emptying on batch sync: it swells and fades as its
@@ -215,5 +215,43 @@
   fill: var(--color-secondary);
   transform-box: fill-box;
   transform-origin: center;
-  animation: fx-drain 0.7s ease-out forwards;
+  animation: fx-drain 0.9s ease-out forwards;
+}
+
+/* Animation captions: a short note pinned above the node an animation lands
+   on, saying what the motion means. Plain HTML over the SVG so the text wraps
+   and themes like any other text. Its duration is set by the hook, which knows
+   how long the animation it explains runs. */
+.cluster-caption {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - var(--caption-lift, 34px)));
+  max-width: 13rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.75rem;
+  background: var(--color-base-300);
+  border: 1px solid color-mix(in oklab, var(--color-base-content) 15%, transparent);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.18);
+  color: var(--color-base-content);
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.25;
+  text-align: center;
+  animation: caption-life 2.5s ease-in-out forwards;
+}
+
+@keyframes caption-life {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, calc(-100% - var(--caption-lift, 34px) + 6px));
+  }
+  8% {
+    opacity: 1;
+    transform: translate(-50%, calc(-100% - var(--caption-lift, 34px)));
+  }
+  82% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
 }

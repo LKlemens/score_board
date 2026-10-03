@@ -6,32 +6,42 @@
 // carries the backlog a node that just came back online exchanges with its
 // peers, drawn deliberately differently: a "replay" (the backlog fit in the
 // ring buffer) is a convoy of dots travelling together down the link (see
-// syncStream), and the buffering node's count box drains as its convoy leaves;
-// a "reload" (the sender overran its buffer, so the receiver's cursor expired) is
-// rings collapsing into the receiving node - no convoy, nothing replayed in
-// order.
+// syncStream); a "reload" (the sender overran its buffer, so the receiver's
+// cursor expired) is rings collapsing into the receiving node - no convoy,
+// because nothing was replayed in order. Both label the node they land on with
+// a caption saying what the motion means, so the animation is not the only
+// explanation.
 //
-// All read the link geometry straight out of the rendered SVG and draw
-// into the #cluster-fx group, which LiveView is told to ignore so a
-// re-render cannot delete an element mid-flight.
+// All read the link geometry straight out of the rendered SVG and draw into
+// the #cluster-fx group, which LiveView is told to ignore so a re-render
+// cannot delete an element mid-flight. Captions are plain HTML in the
+// #cluster-captions layer over the SVG, placed in percentages of the viewBox
+// so they follow their node as the picture scales.
 
 const SVG_NS = "http://www.w3.org/2000/svg"
 const HOP_MS = 520
 const TRAIL = 6
 const TRAIL_GAP = 7
 const RIPPLE_MS = 650
-const RELOAD_MS = 700
+const RELOAD_MS = 1100
 const RELOAD_RINGS = 3
-const RELOAD_GAP_MS = 140
-const BATCH_MS = 760
+const RELOAD_GAP_MS = 200
+const BATCH_MS = 2200
 const BATCH_MAX = 12
 const BATCH_SPREAD = 20
-const DRAIN_MS = 700
+const DRAIN_MS = 900
+// How long a caption stays up after the animation it explains has finished.
+const CAPTION_LINGER_MS = 2600
+const CAPTION_LIFT = 34
+const CAPTION_STACK = 28
 
 export const ClusterFx = {
   mounted() {
     this.alive = true
     this.drawn = new Set()
+    // How many captions each node currently carries, so a second one stacks
+    // above the first instead of covering it.
+    this.captions = new Map()
     this.handleEvent("goal-flight", payload => this.play(payload))
     this.handleEvent("cluster-flush", payload => this.flush(payload))
   },
@@ -40,6 +50,7 @@ export const ClusterFx = {
     this.alive = false
     this.drawn.forEach(element => element.remove())
     this.drawn.clear()
+    this.captions.clear()
   },
 
   async play({hops, team}) {
@@ -50,14 +61,13 @@ export const ClusterFx = {
   },
 
   // A "replay" backlog flushes as one convoy of dots moving together down the
-  // link (see syncStream) - deliberately unlike a single goal's comet streak -
-  // and the receiving node's count box drains as the convoy arrives. A "reload"
-  // backlog is not replayed at all - the receiver's cursor expired, so it pulls
-  // fresh state from the DB, drawn as rings collapsing into that node. Each
-  // reloaded node is drawn once even when several peers overran it.
+  // link (see syncStream) - deliberately unlike a single goal's comet streak.
+  // A "reload" backlog is not replayed at all - the receiver's cursor expired,
+  // so it pulls fresh state from the DB, drawn as rings collapsing into that
+  // node. Each reloaded node is drawn once even when several peers overran it.
   flush({streams}) {
     const reloaded = new Set()
-    const drained = new Set()
+    const captioned = new Set()
 
     ;(streams || []).forEach(({from, to, count, mode}) => {
       if (mode === "reload") {
@@ -66,15 +76,39 @@ export const ClusterFx = {
           this.reloadNode(to)
         }
       } else {
-        // The buffering node's box empties as its convoy leaves; draw the drain
-        // once even if it flushes to several peers.
-        if (!drained.has(from)) {
-          drained.add(from)
-          this.drainBox(from)
+        // Each peer has its own box, so the one that held this backlog drains.
+        this.drainBox(from, to)
+
+        // One caption per receiving node even when several peers sync to it.
+        if (!captioned.has(to)) {
+          captioned.add(to)
+          this.caption(to, "all buffered msgs arrive as one package", BATCH_MS)
         }
+
         this.syncStream(from, to, count)
       }
     })
+  },
+
+  // The count box popping and fading as the backlog it held drains out. Cloned
+  // into the ignored overlay so LiveView's next poll (which removes the real
+  // box) cannot cut the animation short.
+  drainBox(node, peer) {
+    const box = this.el.querySelector(
+      `[data-missing-box="${node}"][data-missing-peer="${peer}"]`
+    )
+    const fx = this.overlay()
+    if (!box || !fx) return
+
+    const clone = box.cloneNode(false)
+    clone.setAttribute("class", "fx-drain")
+    fx.appendChild(clone)
+    this.drawn.add(clone)
+
+    setTimeout(() => {
+      this.drawn.delete(clone)
+      clone.remove()
+    }, DRAIN_MS)
   },
 
   // The buffered backlog draining on reconnect: a whole packet of dots spaced
@@ -132,31 +166,14 @@ export const ClusterFx = {
     requestAnimationFrame(step)
   },
 
-  // The count box popping and fading as the backlog it held drains out. Cloned
-  // into the ignored overlay so LiveView's next poll (which removes the real
-  // box) cannot cut the animation short.
-  drainBox(node) {
-    const box = this.el.querySelector(`[data-missing-box="${node}"]`)
-    const fx = this.overlay()
-    if (!box || !fx) return
-
-    const clone = box.cloneNode(false)
-    clone.setAttribute("class", "fx-drain")
-    fx.appendChild(clone)
-    this.drawn.add(clone)
-
-    setTimeout(() => {
-      this.drawn.delete(clone)
-      clone.remove()
-    }, DRAIN_MS)
-  },
-
   // Overflow recovery: the node reloads from the DB. Rings collapse inward
   // onto it, distinct from the outward ripple a delivered message throws.
   reloadNode(name) {
     const dot = this.el.querySelector(`circle[data-node-dot="${name}"]`)
     const fx = this.overlay()
     if (!dot || !fx) return
+
+    this.caption(name, "cursor expired - fetching data from DB", RELOAD_MS)
 
     for (let index = 0; index < RELOAD_RINGS; index++) {
       const ring = document.createElementNS(SVG_NS, "circle")
@@ -174,6 +191,43 @@ export const ClusterFx = {
         ring.remove()
       }, RELOAD_MS + index * RELOAD_GAP_MS)
     }
+  },
+
+  // A caption pinned beside a node, saying what the animation on it means. It
+  // is an HTML element in the layer over the SVG, positioned in percentages of
+  // the viewBox so it keeps its place as the picture scales, and it outlives
+  // the animation by a beat so there is time to read it.
+  caption(name, text, ms) {
+    const dot = this.el.querySelector(`circle[data-node-dot="${name}"]`)
+    const layer = this.captionLayer()
+    if (!dot || !layer) return
+
+    const view = this.el.viewBox.baseVal
+    const stacked = this.captions.get(name) || 0
+    this.captions.set(name, stacked + 1)
+
+    const element = document.createElement("div")
+    element.className = "cluster-caption"
+    element.textContent = text
+    element.style.left = `${(Number(dot.getAttribute("cx")) / view.width) * 100}%`
+    element.style.top = `${(Number(dot.getAttribute("cy")) / view.height) * 100}%`
+    element.style.setProperty("--caption-lift", `${CAPTION_LIFT + stacked * CAPTION_STACK}px`)
+
+    const total = ms + CAPTION_LINGER_MS
+    element.style.animationDuration = `${total}ms`
+
+    layer.appendChild(element)
+    this.drawn.add(element)
+
+    setTimeout(() => {
+      this.captions.set(name, Math.max(0, (this.captions.get(name) || 1) - 1))
+      this.drawn.delete(element)
+      element.remove()
+    }, total)
+  },
+
+  captionLayer() {
+    return this.el.parentElement && this.el.parentElement.querySelector("#cluster-captions")
   },
 
   // The graph draws one path per unordered pair, so a hop may have to be
