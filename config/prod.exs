@@ -28,7 +28,7 @@ config :score_board, :topologies,
     strategy: Cluster.Strategy.Epmd,
     config: [
       hosts: [:"board1@127.0.0.1", :"board2@127.0.0.1", :"board3@127.0.0.1"],
-      timeout: 5_000
+      timeout: 1_000
     ]
   ]
 

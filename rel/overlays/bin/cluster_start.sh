@@ -24,8 +24,19 @@ start_headless() {
       "${BIN}" daemon
 }
 
-start_headless 2
-start_headless 3
+# epmd up front: three BEAMs racing to spawn it would each try to bind 4369.
+# It ships inside the release's erts dir, not on PATH.
+EPMD="$(ls -d /app/erts-*/bin/epmd 2>/dev/null | head -1)"
+if [ -n "${EPMD}" ]; then
+  "${EPMD}" -daemon
+fi
+
+# No-op unless DATABASE_URL is set (dashboard history only).
+"${BIN}" eval "ScoreBoard.Release.migrate()"
+
+# All three boot at once - serial starts made the cluster assemble in stages.
+start_headless 2 &
+start_headless 3 &
 
 mkdir -p /tmp/board1
 export RELEASE_NODE="board1@127.0.0.1"
