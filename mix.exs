@@ -63,6 +63,8 @@ defmodule ScoreBoard.MixProject do
        app: false,
        compile: false,
        depth: 1},
+      {:ecto_sql, "~> 3.12"},
+      {:postgrex, ">= 0.0.0"},
       {:swoosh, "~> 1.16"},
       {:req, "~> 0.5"},
       {:telemetry_metrics, "~> 1.0"},

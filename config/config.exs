@@ -8,7 +8,15 @@
 import Config
 
 config :score_board,
+  ecto_repos: [ScoreBoard.Repo],
   generators: [timestamp_type: :utc_datetime]
+
+# Dashboard persistence is opt-in: no url, no repo, counters stay in memory.
+config :score_board, ScoreBoard.Repo, url: nil
+config :score_board, :stats_sample_ms, :timer.minutes(1)
+
+# Phone alerts; both values come from the environment in prod.
+config :score_board, :telegram, bot_token: nil, chat_id: nil
 
 # The tenant pool: how many isolated lanes are pre-started, and the ring
 # buffer each lane's event bus keeps (the overflow-reload demo needs a small

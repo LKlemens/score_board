@@ -42,7 +42,15 @@ defmodule ScoreBoard.Application do
     # See https://elixir.hexdocs.pm/Supervisor.html
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: ScoreBoard.Supervisor]
-    Supervisor.start_link(children, opts)
+    Supervisor.start_link(repo() ++ children, opts)
+  end
+
+  # Postgres is optional and only backs the dashboard's history: without a
+  # configured url the repo stays down and the counters are memory-only.
+  defp repo do
+    if Application.get_env(:score_board, ScoreBoard.Repo)[:url],
+      do: [ScoreBoard.Repo],
+      else: []
   end
 
   # Tell Phoenix to update the endpoint configuration

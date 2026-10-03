@@ -24,6 +24,19 @@ end
 config :score_board, ScoreBoardWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+# Both optional, in every environment: no DATABASE_URL means no repo and
+# memory-only dashboard counters; no Telegram pair means no phone alerts.
+if url = System.get_env("DATABASE_URL") do
+  config :score_board, ScoreBoard.Repo,
+    url: url,
+    pool_size: String.to_integer(System.get_env("POOL_SIZE", "4")),
+    socket_options: if(System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: [])
+end
+
+config :score_board, :telegram,
+  bot_token: System.get_env("TELEGRAM_BOT_TOKEN"),
+  chat_id: System.get_env("TELEGRAM_CHAT_ID")
+
 if config_env() == :dev do
   # Reload browser tabs when matching files change.
   config :score_board, ScoreBoardWeb.Endpoint,
