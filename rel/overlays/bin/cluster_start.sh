@@ -31,8 +31,10 @@ if [ -n "${EPMD}" ]; then
   "${EPMD}" -daemon
 fi
 
-# No-op unless DATABASE_URL is set (dashboard history only).
-"${BIN}" eval "ScoreBoard.Release.migrate()"
+# No-op unless DATABASE_URL is set (dashboard history only). Never fatal: the
+# database backs the stats page, not the demo, so an unreachable one must not
+# stop the boards from booting.
+"${BIN}" eval "ScoreBoard.Release.migrate()" || echo "migrate failed - starting without stats history"
 
 # All three boot at once - serial starts made the cluster assemble in stages.
 start_headless 2 &

@@ -14,6 +14,8 @@ config :score_board,
 # Dashboard persistence is opt-in: no url, no repo, counters stay in memory.
 config :score_board, ScoreBoard.Repo, url: nil
 config :score_board, :stats_sample_ms, :timer.minutes(1)
+# UTC hour for the daily Telegram summary; skipped when nothing changed.
+config :score_board, :digest_hour_utc, 8
 
 # Phone alerts; both values come from the environment in prod.
 config :score_board, :telegram, bot_token: nil, chat_id: nil
@@ -21,7 +23,7 @@ config :score_board, :telegram, bot_token: nil, chat_id: nil
 # The tenant pool: how many isolated lanes are pre-started, and the ring
 # buffer each lane's event bus keeps (the overflow-reload demo needs a small
 # one). A lane idle past :lane_ttl_ms goes back to the pool.
-config :score_board, :lane_count, 200
+config :score_board, :lane_count, 300
 config :score_board, :lane_buffer_size, 5
 config :score_board, :lane_ttl_ms, :timer.minutes(5)
 config :score_board, :lane_sweep_ms, :timer.seconds(30)

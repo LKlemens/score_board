@@ -24,5 +24,10 @@ defmodule ScoreBoard.StatsStoreTest do
       assert StatsStore.history(10) == []
       assert StatsStore.last_totals() == %{visits: 0, rejected: 0}
     end
+
+    test "there is no digest to compare against, and recording one is a no-op" do
+      assert StatsStore.last_digest() == nil
+      assert StatsStore.record_digest(@snapshot, ~D[2026-10-03], true) == :ok
+    end
   end
 end

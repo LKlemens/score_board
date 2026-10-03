@@ -133,6 +133,103 @@ defmodule ScoreBoard.StatsTest do
     end
   end
 
+  describe "serving?/0" do
+    setup do
+      original = Application.get_env(:score_board, ScoreBoardWeb.Endpoint)
+      on_exit(fn -> Application.put_env(:score_board, ScoreBoardWeb.Endpoint, original) end)
+      {:ok, original: original}
+    end
+
+    test "false for a headless board", %{original: original} do
+      Application.put_env(
+        :score_board,
+        ScoreBoardWeb.Endpoint,
+        Keyword.put(original, :server, false)
+      )
+
+      refute Stats.serving?()
+    end
+
+    test "true for the node whose endpoint listens", %{original: original} do
+      Application.put_env(
+        :score_board,
+        ScoreBoardWeb.Endpoint,
+        Keyword.put(original, :server, true)
+      )
+
+      assert Stats.serving?()
+    end
+
+    test "true under mix phx.server, which sets serve_endpoints instead", %{original: original} do
+      Application.put_env(
+        :score_board,
+        ScoreBoardWeb.Endpoint,
+        Keyword.delete(original, :server)
+      )
+
+      Application.put_env(:phoenix, :serve_endpoints, true)
+      on_exit(fn -> Application.delete_env(:phoenix, :serve_endpoints) end)
+
+      assert Stats.serving?()
+    end
+  end
+
+  describe "digest_due?/3" do
+    test "not before the configured hour" do
+      refute Stats.digest_due?(nil, ~U[2026-10-03 07:59:00Z], 8)
+    end
+
+    test "due past the hour when nothing was ever sent" do
+      assert Stats.digest_due?(nil, ~U[2026-10-03 08:00:00Z], 8)
+    end
+
+    test "not due again on a day already recorded" do
+      today = %ScoreBoard.StatsDigest{sent_on: ~D[2026-10-03]}
+
+      refute Stats.digest_due?(today, ~U[2026-10-03 20:00:00Z], 8)
+    end
+
+    test "due again the next day" do
+      yesterday = %ScoreBoard.StatsDigest{sent_on: ~D[2026-10-02]}
+
+      assert Stats.digest_due?(yesterday, ~U[2026-10-03 09:00:00Z], 8)
+    end
+  end
+
+  describe "digest_changed?/2" do
+    @snapshot %{
+      visits: 10,
+      online: 1,
+      peak_online: 4,
+      rejected: 2,
+      lanes: %{total: 2, taken: 1, free: 1}
+    }
+
+    test "nothing to report on a first digest with no activity" do
+      refute Stats.digest_changed?(nil, %{@snapshot | visits: 0, rejected: 0})
+    end
+
+    test "a first digest with visitors is worth sending" do
+      assert Stats.digest_changed?(nil, @snapshot)
+    end
+
+    test "identical numbers are not worth sending" do
+      last = %ScoreBoard.StatsDigest{visits: 10, rejected: 2, peak_online: 4}
+
+      refute Stats.digest_changed?(last, @snapshot)
+    end
+
+    test "any moved counter is worth sending" do
+      for field <- [:visits, :rejected, :peak_online] do
+        last =
+          %ScoreBoard.StatsDigest{visits: 10, rejected: 2, peak_online: 4}
+          |> Map.update!(field, &(&1 - 1))
+
+        assert Stats.digest_changed?(last, @snapshot), "expected a change in #{field} to count"
+      end
+    end
+  end
+
   describe "snapshot/0" do
     test "reports the lane pool alongside the counters" do
       snapshot = Stats.snapshot()

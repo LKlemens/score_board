@@ -9,12 +9,19 @@ defmodule ScoreBoard.Stats do
   tab drops out on `:DOWN` and the person disappears once their last tab is
   gone. Counts live in this process, so they are per node; only the web node
   serves pages, so that is the whole picture. When a `ScoreBoard.Repo` is
-  configured the totals are seeded from the last persisted sample and a new
-  sample is written every `sample_ms/0`, which is what survives a restart.
+  configured the totals are seeded from the last persisted sample, which is what
+  survives a restart.
+
+  Only the node that serves pages persists or reports: the headless boards run
+  an idle copy of this server, and without that guard all three would write the
+  same minute's row and send the same daily digest. A sample is written only
+  when the numbers actually moved, so an idle demo writes nothing and the
+  history reads as a list of changes.
   """
   use GenServer
 
   alias ScoreBoard.Lanes
+  alias ScoreBoard.StatsDigest
   alias ScoreBoard.StatsStore
   alias ScoreBoard.Telegram
 
@@ -49,14 +56,44 @@ defmodule ScoreBoard.Stats do
   @spec snapshot() :: snapshot()
   def snapshot, do: GenServer.call(__MODULE__, :snapshot)
 
-  @doc "How often a sample is persisted, when a repo is configured."
+  @doc "How often the counters are checked for a sample or a digest."
   @spec sample_ms() :: pos_integer()
   def sample_ms, do: Application.get_env(:score_board, :stats_sample_ms, :timer.minutes(1))
 
+  @doc "The UTC hour the daily digest goes out."
+  @spec digest_hour() :: 0..23
+  def digest_hour, do: Application.get_env(:score_board, :digest_hour_utc, 8)
+
+  @doc """
+  Whether this node serves pages, and so owns persistence and reporting.
+
+  The headless boards of a release run the same supervision tree; only the one
+  started with `PHX_SERVER=true` has the endpoint listening. Phoenix's own check
+  is used because `mix phx.server` enables the endpoint through
+  `:phoenix, :serve_endpoints` rather than the endpoint's `:server` key.
+  """
+  @spec serving?() :: boolean()
+  def serving?, do: Phoenix.Endpoint.server?(:score_board, ScoreBoardWeb.Endpoint)
+
+  @doc false
+  @spec digest_due?(StatsDigest.t() | nil, DateTime.t(), 0..23) :: boolean()
+  def digest_due?(last_digest, now, hour) do
+    now.hour >= hour and (last_digest == nil or Date.compare(last_digest.sent_on, now) == :lt)
+  end
+
+  @doc false
+  @spec digest_changed?(StatsDigest.t() | nil, snapshot()) :: boolean()
+  def digest_changed?(nil, snapshot), do: snapshot.visits > 0 or snapshot.rejected > 0
+
+  def digest_changed?(last_digest, snapshot) do
+    last_digest.visits != snapshot.visits or last_digest.rejected != snapshot.rejected or
+      last_digest.peak_online != snapshot.peak_online
+  end
+
   @impl GenServer
   def init(:ok) do
-    seed = StatsStore.last_totals()
-    schedule_sample()
+    seed = if serving?(), do: StatsStore.last_totals(), else: %{visits: 0, rejected: 0}
+    if serving?(), do: schedule_sample()
 
     {:ok,
      %{
@@ -66,7 +103,9 @@ defmodule ScoreBoard.Stats do
        # pid => tenant, so several tabs of one browser are one visitor.
        online: %{},
        seen: MapSet.new(),
-       alerted_at: nil
+       alerted_at: nil,
+       # The last snapshot written, so an unchanged minute writes nothing.
+       last_sample: nil
      }}
   end
 
@@ -108,8 +147,45 @@ defmodule ScoreBoard.Stats do
   @impl GenServer
   def handle_info(:sample, state) do
     schedule_sample()
-    StatsStore.record(build_snapshot(state))
-    {:noreply, state}
+    snapshot = build_snapshot(state)
+
+    {:noreply, state |> record_sample(snapshot) |> maybe_digest(snapshot)}
+  end
+
+  defp record_sample(state, snapshot) do
+    if snapshot == state.last_sample do
+      state
+    else
+      StatsStore.record(snapshot)
+      %{state | last_sample: snapshot}
+    end
+  end
+
+  # Once a day, past the configured hour: report the day's movement, or record
+  # the day as handled and stay quiet when nothing moved.
+  defp maybe_digest(state, snapshot) do
+    last = StatsStore.last_digest()
+    now = DateTime.utc_now()
+
+    if digest_due?(last, now, digest_hour()) do
+      changed? = digest_changed?(last, snapshot)
+      if changed?, do: Telegram.notify(digest_message(last, snapshot))
+      StatsStore.record_digest(snapshot, DateTime.to_date(now), changed?)
+    end
+
+    state
+  end
+
+  defp digest_message(last, snapshot) do
+    since = fn field -> snapshot[field] - ((last && Map.get(last, field)) || 0) end
+
+    """
+    Scoreboard daily summary
+    New visitors: #{since.(:visits)} (#{snapshot.visits} total)
+    Turned away: #{since.(:rejected)} (#{snapshot.rejected} total)
+    Peak online: #{snapshot.peak_online}
+    Lanes in use: #{snapshot.lanes.taken}/#{snapshot.lanes.total}
+    """
   end
 
   defp build_snapshot(state) do

@@ -10,6 +10,7 @@ defmodule ScoreBoard.StatsStore do
 
   alias ScoreBoard.Repo
   alias ScoreBoard.Stats
+  alias ScoreBoard.StatsDigest
   alias ScoreBoard.StatsSample
 
   @doc "Whether persistence is available right now."
@@ -57,6 +58,43 @@ defmodule ScoreBoard.StatsStore do
     else
       []
     end
+  end
+
+  @doc "The newest daily digest, or nil when none has been recorded."
+  @spec last_digest() :: StatsDigest.t() | nil
+  def last_digest do
+    if enabled?() do
+      StatsDigest |> order_by(desc: :sent_on) |> limit(1) |> Repo.one()
+    end
+  end
+
+  @doc """
+  Records that a day's digest was handled.
+
+  `sent?` is false when the day had nothing new to report - the row still goes
+  in, so the day is not reconsidered on every tick.
+  """
+  @spec record_digest(Stats.snapshot(), Date.t(), boolean()) :: :ok
+  def record_digest(snapshot, day, sent?) do
+    if enabled?() do
+      Repo.insert_all(
+        StatsDigest,
+        [
+          %{
+            sent_on: day,
+            visits: snapshot.visits,
+            rejected: snapshot.rejected,
+            peak_online: snapshot.peak_online,
+            sent: sent?,
+            inserted_at: DateTime.utc_now()
+          }
+        ],
+        on_conflict: :nothing,
+        conflict_target: :sent_on
+      )
+    end
+
+    :ok
   end
 
   defp latest do

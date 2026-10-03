@@ -27,15 +27,23 @@ config :score_board, ScoreBoardWeb.Endpoint,
 # Both optional, in every environment: no DATABASE_URL means no repo and
 # memory-only dashboard counters; no Telegram pair means no phone alerts.
 if url = System.get_env("DATABASE_URL") do
+  # fly's .flycast and .internal names resolve over IPv6 only, so an IPv4
+  # connect gets :nxdomain. Default to inet6 for those; ECTO_IPV6 forces it.
+  ipv6? = System.get_env("ECTO_IPV6") in ~w(true 1) or url =~ ~r/\.(flycast|internal)[:\/]/
+
   config :score_board, ScoreBoard.Repo,
     url: url,
     pool_size: String.to_integer(System.get_env("POOL_SIZE", "4")),
-    socket_options: if(System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: [])
+    socket_options: if(ipv6?, do: [:inet6], else: [])
 end
 
 config :score_board, :telegram,
   bot_token: System.get_env("TELEGRAM_BOT_TOKEN"),
   chat_id: System.get_env("TELEGRAM_CHAT_ID")
+
+if hour = System.get_env("DIGEST_HOUR") do
+  config :score_board, :digest_hour_utc, String.to_integer(hour)
+end
 
 if config_env() == :dev do
   # Reload browser tabs when matching files change.
