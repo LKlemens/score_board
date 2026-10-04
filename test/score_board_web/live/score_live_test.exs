@@ -31,36 +31,42 @@ defmodule ScoreBoardWeb.ScoreLiveTest do
   end
 
   describe "the process graph" do
-    test "shows VMs, their processes and a legend, and hides on demand", %{conn: conn, id: id} do
+    test "opens in a modal from the cluster graph and closes again", %{conn: conn, id: id} do
       Matches.create_match(id)
       {:ok, view, html} = live(conn, ~p"/")
 
-      # Collapsed on arrival: only the header is there.
-      assert html =~ "What runs behind this board"
+      # Closed on arrival: only the button that opens it.
+      assert html =~ "Show the processes running on these nodes"
+      refute html =~ "modal modal-open"
       refute html =~ "One process per match"
-      refute html =~ "unique in the cluster"
 
-      view |> element("button", "What runs behind this board") |> render_click()
+      view
+      |> element("button", "Show the processes running on these nodes")
+      |> render_click()
 
       assert_eventually(fn ->
         shown = render(view)
+        assert shown =~ "modal modal-open"
+        assert shown =~ "What runs behind this board"
         assert shown =~ "One process per match"
         assert shown =~ "BEAM VM"
-        assert shown =~ "board process"
         assert shown =~ "unique in the cluster"
       end)
 
-      hidden = view |> element("button", "What runs behind this board") |> render_click()
+      closed = view |> element("[data-processes-modal] .modal-backdrop") |> render_click()
 
-      # Hiding takes the explanation with it - it lives in the same section.
-      refute hidden =~ "unique in the cluster"
-      refute hidden =~ "One process per match"
-      assert hidden =~ "What runs behind this board"
+      refute closed =~ "modal modal-open"
+      refute closed =~ "One process per match"
+      assert closed =~ "Show the processes running on these nodes"
     end
 
     test "explains matches, broadcasting and the local boards", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/")
-      html = view |> element("button", "What runs behind this board") |> render_click()
+
+      html =
+        view
+        |> element("button", "Show the processes running on these nodes")
+        |> render_click()
 
       assert html =~ "Each match is a single process living on one node"
       assert html =~ "keeping each match&#39;s score in an ETS table"

@@ -273,6 +273,12 @@ defmodule ScoreBoardWeb.ScoreLive do
           </span>
         </div>
 
+        <div class="text-center">
+          <button class="btn btn-outline btn-sm gap-2" phx-click="toggle-processes">
+            Show the processes running on these nodes
+          </button>
+        </div>
+
         <ClusterViz.cluster_viz
           nodes={@nodes}
           cluster={@cluster}
@@ -364,28 +370,25 @@ defmodule ScoreBoardWeb.ScoreLive do
           No matches yet.
         </p>
 
-        <section
-          class="max-w-4xl mx-auto rounded-box border border-base-300 bg-base-200/30 shadow-sm"
-          data-intro
+        <div
+          :if={@show_processes?}
+          class="modal modal-open"
+          phx-window-keydown="toggle-processes"
+          phx-key="escape"
+          data-processes-modal
         >
-          <button
-            class="w-full flex items-center justify-between gap-3 px-5 py-3 cursor-pointer hover:bg-base-200/60 rounded-box transition-colors"
-            phx-click="toggle-processes"
-          >
-            <span class="text-sm font-bold uppercase tracking-wider opacity-70">
-              What runs behind this board
-            </span>
-            <span class="btn btn-xs btn-ghost gap-1 pointer-events-none">
-              {if @show_processes?, do: "Hide", else: "Show"}
-              <span aria-hidden="true">{if @show_processes?, do: "▾", else: "▸"}</span>
-            </span>
-          </button>
+          <div class="modal-box max-w-5xl space-y-5">
+            <div class="flex items-start justify-between gap-4">
+              <h2 class="text-lg font-bold">What runs behind this board</h2>
+              <button class="btn btn-sm btn-circle btn-ghost" phx-click="toggle-processes">
+                ✕
+              </button>
+            </div>
 
-          <div :if={@show_processes?} class="px-5 pb-5 space-y-5">
             <div class="grid gap-3 sm:grid-cols-3">
               <article
                 :for={step <- steps()}
-                class="rounded-box border border-base-300 bg-base-100 p-4 space-y-2"
+                class="rounded-box border border-base-300 bg-base-200/40 p-4 space-y-2"
               >
                 <div class="flex items-center gap-2">
                   <span class="badge badge-primary badge-sm font-bold">{step.number}</span>
@@ -402,11 +405,12 @@ defmodule ScoreBoardWeb.ScoreLive do
               node={@node}
             />
 
-            <div class="rounded-box border border-base-300 bg-base-100 px-4 py-3">
+            <div class="rounded-box border border-base-300 bg-base-200/40 px-4 py-3">
               <ProcessViz.legend />
             </div>
           </div>
-        </section>
+          <div class="modal-backdrop" phx-click="toggle-processes"></div>
+        </div>
       </div>
     </Layouts.app>
     """
