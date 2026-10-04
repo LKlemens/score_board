@@ -326,6 +326,11 @@ defmodule ScoreBoardWeb.ScoreLive do
           <span>{@error}</span>
         </div>
 
+        <p :if={@matches != []} class="text-center text-xs opacity-60 -mb-4">
+          one column per node - each is a separate BEAM VM keeping its own derived board,
+          next to the true score held by the match process
+        </p>
+
         <div
           :if={@matches != []}
           class="overflow-x-auto rounded-box border border-base-300 bg-base-100 shadow-sm"
@@ -338,9 +343,9 @@ defmodule ScoreBoardWeb.ScoreLive do
                 <th class="text-center text-[11px] uppercase tracking-wider opacity-70">
                   True score
                 </th>
-                <th :for={board_node <- @nodes} class="text-center">
+                <th :for={board_node <- @nodes} class="text-center" title={board_node}>
                   <div class="flex flex-col items-center gap-1">
-                    <span class="font-mono text-xs">{short_name(board_node)}</span>
+                    <span class="font-mono text-xs cursor-help">{short_name(board_node)}</span>
                     <span :if={board_node == @node} class="badge badge-ghost badge-xs">this</span>
                     <span
                       :if={@boards[board_node] == :unreachable}
@@ -357,7 +362,7 @@ defmodule ScoreBoardWeb.ScoreLive do
               <tr :for={match <- @matches} data-match-id={match.id} class="hover:bg-base-200/60">
                 <td class="font-mono font-medium">{match.id}</td>
                 <td>
-                  <span class="badge badge-ghost badge-sm font-mono">
+                  <span class="badge badge-ghost badge-sm font-mono cursor-help" title={match.owner}>
                     {(match.owner && short_name(match.owner)) || "…"}
                   </span>
                 </td>

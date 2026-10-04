@@ -64,6 +64,9 @@ defmodule ScoreBoardWeb.ClusterViz do
     assigns = assign(assigns, :stories, stories(assigns.circles))
 
     ~H"""
+    <p class="text-center text-sm font-semibold max-w-3xl mx-auto mb-2">
+      Each circle is one node - a separate BEAM VM with its own board state.
+    </p>
     <div class="relative w-full max-w-3xl mx-auto">
       <svg
         id="cluster-viz"
@@ -117,23 +120,26 @@ defmodule ScoreBoardWeb.ClusterViz do
         </g>
 
         <g :for={circle <- @circles}>
-          <circle
-            cx={circle.x}
-            cy={circle.y}
-            r="26"
-            class={[circle.halo_class, "opacity-30", circle.pulse? && "animate-pulse"]}
-            filter="url(#node-glow)"
-          />
-          <circle
-            cx={circle.x}
-            cy={circle.y}
-            r="20"
-            fill={circle.fill}
-            class="stroke-base-100"
-            stroke-width="2"
-            stroke-opacity="0.7"
-            data-node-dot={circle.node}
-          />
+          <g class="cursor-help">
+            <title>{circle.node}</title>
+            <circle
+              cx={circle.x}
+              cy={circle.y}
+              r="26"
+              class={[circle.halo_class, "opacity-30", circle.pulse? && "animate-pulse"]}
+              filter="url(#node-glow)"
+            />
+            <circle
+              cx={circle.x}
+              cy={circle.y}
+              r="20"
+              fill={circle.fill}
+              class="stroke-base-100"
+              stroke-width="2"
+              stroke-opacity="0.7"
+              data-node-dot={circle.node}
+            />
+          </g>
           <g :for={box <- circle.boxes}>
             <rect
               x={box.x}

@@ -24,6 +24,22 @@ defmodule ScoreBoardWeb.ScoreLiveTest do
     {:ok, conn: conn, tenant: tenant, lane: lane, id: Atom.to_string(test)}
   end
 
+  describe "node identity" do
+    test "the table explains that a column is a node", %{conn: conn, lane: lane, id: id} do
+      Matches.create_match(lane, id)
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      assert_eventually(fn -> assert render(view) =~ "one column per node" end)
+    end
+
+    test "a column header carries the full node name", %{conn: conn, lane: lane, id: id} do
+      Matches.create_match(lane, id)
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      assert_eventually(fn -> assert render(view) =~ ~s(title="#{node()}") end)
+    end
+  end
+
   describe "idle expiry" do
     test "the page turns static when the lane expires", %{conn: conn, tenant: tenant} do
       {:ok, view, html} = live(conn, ~p"/")
