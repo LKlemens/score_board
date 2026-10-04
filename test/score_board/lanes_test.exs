@@ -109,8 +109,12 @@ defmodule ScoreBoard.LanesTest do
       Application.put_env(:score_board, :lane_ttl_ms, 0)
       Lanes.sweep()
 
-      assert Matches.list_matches(id) == []
-      assert ScoreBoard.DB.all(id) == %{}
+      # Horde drops registry entries asynchronously, so the list empties a beat
+      # after terminate_child/2 returns.
+      assert_eventually(fn ->
+        assert Matches.list_matches(id) == []
+        assert ScoreBoard.DB.all(id) == %{}
+      end)
     end
 
     test "an untouched tenant is swept even if it never acted", %{tenant: tenant} do

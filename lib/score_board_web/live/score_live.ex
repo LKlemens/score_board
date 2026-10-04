@@ -18,6 +18,7 @@ defmodule ScoreBoardWeb.ScoreLive do
   alias ScoreBoard.Matches
   alias ScoreBoard.Stats
   alias ScoreBoardWeb.ClusterViz
+  alias ScoreBoardWeb.ProcessViz
 
   @poll_interval 500
   @remote_timeout 500
@@ -47,6 +48,7 @@ defmodule ScoreBoardWeb.ScoreLive do
             error: nil,
             expired?: false,
             blip: Blip.enabled?(lane),
+            show_processes?: false,
             buffer_since: %{},
             sustained: MapSet.new()
           )
@@ -65,6 +67,7 @@ defmodule ScoreBoardWeb.ScoreLive do
             error: "All demo lanes are busy right now - try again in a moment.",
             expired?: false,
             blip: false,
+            show_processes?: false,
             buffer_since: %{},
             sustained: MapSet.new(),
             nodes: [],
@@ -95,6 +98,10 @@ defmodule ScoreBoardWeb.ScoreLive do
     # Keep the header badge in step when this node was toggled.
     socket = if target == node(), do: assign(socket, blip: Blip.enabled?(lane)), else: socket
     {:noreply, refresh(socket)}
+  end
+
+  def handle_event("toggle-processes", _params, socket) do
+    {:noreply, update(socket, :show_processes?, &(not &1))}
   end
 
   @impl Phoenix.LiveView
@@ -267,6 +274,35 @@ defmodule ScoreBoardWeb.ScoreLive do
   defp stale?(_cell, nil), do: false
   defp stale?(cell, truth), do: cell != truth
 
+  # The three ideas the picture below illustrates, in the order they happen.
+  defp steps do
+    [
+      %{
+        number: "1",
+        title: "One process per match",
+        body:
+          "Each match is a single process living on one node of the cluster - the only " <>
+            "place its score can be updated."
+      },
+      %{
+        number: "2",
+        title: "Each node reads locally",
+        body:
+          "Every node runs a board process keeping each match's score in an ETS table, so a " <>
+            "read is a local lookup. Without it every read would be a GenServer.call to the " <>
+            "match process, and a hot match would become a bottleneck."
+      },
+      %{
+        number: "3",
+        title: "Broadcasts keep them equal",
+        body:
+          "When a goal is scored, the match process broadcasts it. Every board listens for " <>
+            "those events and writes them to its own ETS table, so all nodes end up with the " <>
+            "same score without ever asking the match."
+      }
+    ]
+  end
+
   defp short_name(node_atom) do
     node_atom |> Atom.to_string() |> String.split("@") |> hd()
   end
@@ -309,6 +345,50 @@ defmodule ScoreBoardWeb.ScoreLive do
             {if @blip, do: "offline", else: "connected"}
           </span>
         </div>
+
+        <section
+          class="max-w-4xl mx-auto rounded-box border border-base-300 bg-base-200/30 shadow-sm"
+          data-intro
+        >
+          <button
+            class="w-full flex items-center justify-between gap-3 px-5 py-3 cursor-pointer hover:bg-base-200/60 rounded-box transition-colors"
+            phx-click="toggle-processes"
+          >
+            <span class="text-sm font-bold uppercase tracking-wider opacity-70">
+              What runs behind this board
+            </span>
+            <span class="btn btn-xs btn-ghost gap-1 pointer-events-none">
+              {if @show_processes?, do: "Hide", else: "Show"}
+              <span aria-hidden="true">{if @show_processes?, do: "▾", else: "▸"}</span>
+            </span>
+          </button>
+
+          <div :if={@show_processes?} class="px-5 pb-5 space-y-5">
+            <div class="grid gap-3 sm:grid-cols-3">
+              <article
+                :for={step <- steps()}
+                class="rounded-box border border-base-300 bg-base-100 p-4 space-y-2"
+              >
+                <div class="flex items-center gap-2">
+                  <span class="badge badge-primary badge-sm font-bold">{step.number}</span>
+                  <h3 class="text-sm font-semibold">{step.title}</h3>
+                </div>
+                <p class="text-xs leading-relaxed opacity-80">{step.body}</p>
+              </article>
+            </div>
+
+            <ProcessViz.process_map
+              nodes={@nodes}
+              matches={@matches}
+              boards={@boards}
+              node={@node}
+            />
+
+            <div class="rounded-box border border-base-300 bg-base-100 px-4 py-3">
+              <ProcessViz.legend />
+            </div>
+          </div>
+        </section>
 
         <ClusterViz.cluster_viz
           nodes={@nodes}

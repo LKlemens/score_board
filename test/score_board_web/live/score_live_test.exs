@@ -24,6 +24,52 @@ defmodule ScoreBoardWeb.ScoreLiveTest do
     {:ok, conn: conn, tenant: tenant, lane: lane, id: Atom.to_string(test)}
   end
 
+  describe "the process graph" do
+    test "shows VMs, their processes and a legend, and hides on demand", %{
+      conn: conn,
+      lane: lane,
+      id: id
+    } do
+      Matches.create_match(lane, id)
+      {:ok, view, html} = live(conn, ~p"/")
+
+      # Collapsed on arrival: only the header is there.
+      assert html =~ "What runs behind this board"
+      refute html =~ "One process per match"
+      refute html =~ "unique in the cluster"
+
+      view |> element("button", "What runs behind this board") |> render_click()
+
+      assert_eventually(fn ->
+        shown = render(view)
+        assert shown =~ "One process per match"
+        assert shown =~ "BEAM VM"
+        assert shown =~ "board process"
+        assert shown =~ "unique in the cluster"
+      end)
+
+      hidden = view |> element("button", "What runs behind this board") |> render_click()
+
+      # Hiding takes the explanation with it - it lives in the same section.
+      refute hidden =~ "unique in the cluster"
+      refute hidden =~ "One process per match"
+      assert hidden =~ "What runs behind this board"
+    end
+  end
+
+  describe "introduction" do
+    test "explains matches, broadcasting and the local boards", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/")
+      html = view |> element("button", "What runs behind this board") |> render_click()
+
+      assert html =~ "Each match is a single process"
+      assert html =~ "listens"
+      assert html =~ "writes them to its own ETS table"
+      assert html =~ "keeping each match&#39;s score in an ETS table"
+      assert html =~ "bottleneck"
+    end
+  end
+
   describe "node identity" do
     test "the table explains that a column is a node", %{conn: conn, lane: lane, id: id} do
       Matches.create_match(lane, id)
