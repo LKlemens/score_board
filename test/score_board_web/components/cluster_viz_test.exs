@@ -156,6 +156,19 @@ defmodule ScoreBoardWeb.ClusterVizTest do
       assert html =~ ~r/<rect[^>]*class="fill-success"><\/rect>\s*<text[^>]*>\s*Back online/
     end
 
+    test "each node is hoverable and names itself in full" do
+      html = render_viz(%{:"board1@127.0.0.1" => up(), :"board2@127.0.0.1" => up()})
+
+      assert html =~ "<title>board1@127.0.0.1</title>"
+      assert html =~ "<title>board2@127.0.0.1</title>"
+    end
+
+    test "a heading above the graph says a circle is a node" do
+      html = render_viz(%{a: up(), b: up()})
+
+      assert html =~ "Each circle is one node - a separate BEAM VM with its own board state."
+    end
+
     test "the tooltip shows the missing count against the max capacity" do
       html = render_viz(%{a: up(b: 6), b: blipped(a: 0)})
 
@@ -270,6 +283,7 @@ defmodule ScoreBoardWeb.ClusterVizTest do
     )
   end
 
+  defp up, do: @up
   defp up(pending), do: %{@up | pending: Map.new(pending)}
   defp blipped(pending), do: %{@blipped | pending: Map.new(pending)}
 end

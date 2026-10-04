@@ -30,6 +30,22 @@ defmodule ScoreBoardWeb.ScoreLiveTest do
     |> String.trim()
   end
 
+  describe "node identity" do
+    test "the table explains that a column is a node", %{conn: conn, id: id} do
+      Matches.create_match(id)
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      assert_eventually(fn -> assert render(view) =~ "one column per node" end)
+    end
+
+    test "a column header carries the full node name", %{conn: conn, id: id} do
+      Matches.create_match(id)
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      assert_eventually(fn -> assert render(view) =~ ~s(title="#{node()}") end)
+    end
+  end
+
   test "renders the node name", %{conn: conn} do
     {:ok, _view, html} = live(conn, ~p"/")
 
