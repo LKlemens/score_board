@@ -49,9 +49,21 @@ defmodule ScoreBoardWeb.Layouts do
               href="https://github.com/LKlemens/echo_pubsub"
               target="_blank"
               rel="noopener"
-              class="btn btn-ghost"
+              class="btn btn-ghost btn-sm font-mono"
+              title="The library this demo exercises"
             >
-              GitHub
+              echo_pubsub
+            </a>
+          </li>
+          <li>
+            <a
+              href="https://github.com/LKlemens/score_board"
+              target="_blank"
+              rel="noopener"
+              class="btn btn-ghost btn-sm font-mono"
+              title="The source of this demo app"
+            >
+              score_board
             </a>
           </li>
           <li>
@@ -62,9 +74,9 @@ defmodule ScoreBoardWeb.Layouts do
               href="https://echo-pubsub.hexdocs.pm/"
               target="_blank"
               rel="noopener"
-              class="btn btn-primary"
+              class="btn btn-primary btn-sm"
             >
-              echo_pubsub docs <span aria-hidden="true">&rarr;</span>
+              docs <span aria-hidden="true">&rarr;</span>
             </a>
           </li>
         </ul>
