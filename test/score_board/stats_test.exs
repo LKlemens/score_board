@@ -192,6 +192,41 @@ defmodule ScoreBoard.StatsTest do
     end
   end
 
+  describe "counts_moved?/2" do
+    @sample %{
+      visits: 4,
+      online: 2,
+      peak_online: 3,
+      rejected: 1,
+      lanes: %{total: 2, taken: 1, free: 1}
+    }
+
+    test "the first sample always counts" do
+      assert Stats.counts_moved?(nil, @sample)
+    end
+
+    test "a new visitor counts" do
+      assert Stats.counts_moved?(@sample, %{@sample | visits: 5})
+    end
+
+    test "a rejection counts" do
+      assert Stats.counts_moved?(@sample, %{@sample | rejected: 2})
+    end
+
+    test "tabs opening and closing do not" do
+      refute Stats.counts_moved?(@sample, %{@sample | online: 0})
+      refute Stats.counts_moved?(@sample, %{@sample | online: 7, peak_online: 7})
+    end
+
+    test "lane churn on its own does not" do
+      refute Stats.counts_moved?(@sample, %{@sample | lanes: %{total: 2, taken: 2, free: 0}})
+    end
+
+    test "an unchanged snapshot does not" do
+      refute Stats.counts_moved?(@sample, @sample)
+    end
+  end
+
   describe "the digest without a database" do
     test "never fires, because there is nowhere to remember what was sent" do
       # The repo is down in test, which is the same shape as a dev node with no

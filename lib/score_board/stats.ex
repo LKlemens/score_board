@@ -14,9 +14,10 @@ defmodule ScoreBoard.Stats do
 
   Only the node that serves pages persists or reports: the headless boards run
   an idle copy of this server, and without that guard all three would write the
-  same minute's row and send the same daily digest. A sample is written only
-  when the numbers actually moved, so an idle demo writes nothing and the
-  history reads as a list of changes.
+  same minute's row and send the same daily digest. A sample is stored only when
+  a count moves - a new visitor or someone turned away - so the history reads as
+  a log of those events rather than a minute-by-minute trace. Tabs opening and
+  closing do not earn a row.
   """
   use GenServer
 
@@ -74,6 +75,20 @@ defmodule ScoreBoard.Stats do
   """
   @spec serving?() :: boolean()
   def serving?, do: Phoenix.Endpoint.server?(:score_board, ScoreBoardWeb.Endpoint)
+
+  @doc """
+  Whether a snapshot is worth storing, given the last one that was.
+
+  Only the counts decide. `online` and the lane gauge move with every tab, so
+  including them filled the history with rows repeating the same visitor
+  numbers.
+  """
+  @spec counts_moved?(snapshot() | nil, snapshot()) :: boolean()
+  def counts_moved?(nil, _snapshot), do: true
+
+  def counts_moved?(last, snapshot) do
+    last.visits != snapshot.visits or last.rejected != snapshot.rejected
+  end
 
   @doc false
   @spec digest_due?(Date.t() | nil, DateTime.t(), 0..23) :: boolean()
@@ -155,11 +170,11 @@ defmodule ScoreBoard.Stats do
   end
 
   defp record_sample(state, snapshot) do
-    if snapshot == state.last_sample do
-      state
-    else
+    if counts_moved?(state.last_sample, snapshot) do
       StatsStore.record(snapshot)
       %{state | last_sample: snapshot}
+    else
+      state
     end
   end
 
